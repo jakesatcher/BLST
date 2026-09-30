@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BLST API</title>
+  <link rel="stylesheet" href="/css/app.css">
+  <style>
+    code, pre { font-family: var(--mono); font-size: 0.85rem; }
+    pre { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 12px; overflow-x: auto; }
+    td code { white-space: nowrap; }
+    td { white-space: normal; vertical-align: top; }
+    .m { font-weight: 700; font-family: var(--mono); font-size: 0.8rem; }
+  </style>
+</head>
+<body>
+  <div id="top"></div>
+  <main>
+    <h1>BLST API</h1>
+    <div class="card">
+      <p>Base URL <code>/api/v1</code>. JSON in and out. CORS is open, so browser apps on other domains can call it.</p>
+      <p><b>Auth:</b> reads are public. Writes need <code>Authorization: Bearer &lt;key&gt;</code>. <code>x-api-key</code> and <code>x-admin-token</code> are also accepted. Roles: <b>admin</b> can do everything, <b>scorekeeper</b> can run games, and <b>readonly</b> can use exports when <code>PUBLIC_EXPORTS=false</code>. Keys are created in Admin → API keys. <code>GET /me</code> shows the role of the current key.</p>
+      <p><b>Errors:</b> <code>{"error": "message"}</code> with a 4xx status (400 validation, 401/403 auth, 404, 409 conflict/state, 422 import rejected).</p>
+    </div>
+
+    <h2 id="export">Export API (for other applications)</h2>
+    <div class="card table-wrap"><table>
+      <tr><td class="m">GET</td><td><code>/export/tournaments/:id</code></td><td>Everything in one call: tournament, teams with rosters, standings, games, skater and goalie stats. Add <code>?format=csv</code> to get skaters as CSV.</td></tr>
+      <tr><td class="m">GET</td><td><code>/export/tournaments/:id/skaters</code></td><td>Skater lines (G, A, PTS, +/-, PIM, PPG, PPA, SHG, SHA, GWG, ENG, SOG, S%, hits, blocks, FOW/FOL, FO%, GV/TK…). <code>?format=csv</code></td></tr>
+      <tr><td class="m">GET</td><td><code>/export/tournaments/:id/goalies</code></td><td>GP, TOI, W/L/OTL/T, SA, GA, SV, SV%, GAA, SO. <code>?format=csv</code></td></tr>
+      <tr><td class="m">GET</td><td><code>/export/tournaments/:id/standings</code></td><td>Standings. <code>?format=csv</code></td></tr>
+      <tr><td class="m">GET</td><td><code>/export/tournaments/:id/games</code></td><td>Schedule and results. <code>?format=csv</code></td></tr>
+      <tr><td class="m">GET</td><td><code>/export/games/:id</code></td><td>Full game snapshot and play-by-play. <code>?format=csv</code> gives the events.</td></tr>
+      <tr><td class="m">GET</td><td><code>/export/players/:id</code></td><td>Career: imported history, per-tournament lines, totals. <code>?format=csv</code></td></tr>
+      <tr><td class="m">GET</td><td><code>/export/players</code></td><td>All players (no emails). <code>?format=csv</code></td></tr>
+    </table>
+    <p class="muted small">JSON exports include <code>schema_version</code> (currently 1) and <code>exported_at</code>. Player stat lines include <code>by_team</code> splits for players who moved teams mid-tournament.</p></div>
+
+    <h2>Live data</h2>
+    <div class="card table-wrap"><table>
+      <tr><td class="m">GET</td><td><code>/tournaments</code>, <code>/tournaments/:id</code></td><td>Tournaments, with teams</td></tr>
+      <tr><td class="m">GET</td><td><code>/tournaments/:id/teams</code>, <code>/teams/:id</code></td><td>Teams with rosters and jersey numbers</td></tr>
+      <tr><td class="m">GET</td><td><code>/tournaments/:id/games</code>, <code>/games?live=true</code></td><td>Schedule, scores, and clock state</td></tr>
+      <tr><td class="m">GET</td><td><code>/tournaments/:id/standings</code></td><td>Pool-play standings</td></tr>
+      <tr><td class="m">GET</td><td><code>/tournaments/:id/stats/skaters</code>, <code>/stats/goalies</code></td><td><code>?team_id=</code> to filter</td></tr>
+      <tr><td class="m">GET</td><td><code>/tournaments/:id/leaders?limit=5</code></td><td>Points, goals, assists, +/-, PIM, SV%, GAA, wins, shutouts</td></tr>
+      <tr><td class="m">GET</td><td><code>/games/:id</code></td><td>Live snapshot: clock, score, shots, strength, active penalties, events, lineups, box score</td></tr>
+      <tr><td class="m">GET</td><td><code>/players?q=</code>, <code>/players/:id</code>, <code>/players/:id/career</code></td><td>Players and career stats</td></tr>
+      <tr><td class="m">GET</td><td><code>/stream?game_id=N</code></td><td>SSE. Sends a <code>snapshot</code> event on connect and after every change.</td></tr>
+      <tr><td class="m">GET</td><td><code>/stream?tournament_id=N</code></td><td>SSE. Sends <code>game.summary</code> (score and clock for each game) and <code>tournament.changed</code>.</td></tr>
+    </table>
+    <p class="muted small">Clock: with <code>clock_running</code> true, remaining time is <code>clock_remaining_ms − (now − server_now)</code>. Snapshots are only pushed on change, so tick locally in between.</p></div>
+
+    <h2>Scorekeeping <span class="badge">scorekeeper</span></h2>
+    <div class="card table-wrap"><table>
+      <tr><td class="m">POST</td><td><code>/games/:id/start</code></td><td><code>{home_goalie_id?, away_goalie_id?}</code> Snapshots lineups and starts period 1 with the clock stopped</td></tr>
+      <tr><td class="m">POST</td><td><code>/games/:id/clock</code></td><td><code>{action: "start"|"stop"}</code>, <code>{action:"set", remaining_sec}</code>, <code>{action:"adjust", delta_sec}</code></td></tr>
+      <tr><td class="m">POST</td><td><code>/games/:id/period/end</code>, <code>/period/next</code></td><td>Intermission, then the next period or OT</td></tr>
+      <tr><td class="m">POST</td><td><code>/games/:id/end</code>, <code>/reopen</code></td><td><code>{decision?, allow_tie?}</code> Ties are refused unless the tournament allows them</td></tr>
+      <tr><td class="m">POST</td><td><code>/games/:id/events</code></td><td>Record an event (see below)</td></tr>
+      <tr><td class="m">PATCH</td><td><code>/games/:id/events/:eventId</code></td><td>Correct any field</td></tr>
+      <tr><td class="m">DELETE</td><td><code>/games/:id/events/:eventId</code></td><td>Void (kept for history). <code>POST …/restore</code> undoes it</td></tr>
+      <tr><td class="m">POST</td><td><code>/games/:id/goalie</code></td><td><code>{team_id, goalie_id|null}</code> Change or pull the goalie</td></tr>
+      <tr><td class="m">PATCH</td><td><code>/games/:id/lineup</code></td><td><code>{player_id, team_id?, dressed?, jersey_number?}</code> Scratch a player or add a late one</td></tr>
+    </table>
+<pre>POST /api/v1/games/12/events
+{ "type": "goal", "player_id": 41, "assist1_id": 44, "clock": "12:34" }</pre>
+    <p class="small">Event <code>type</code>: goal, shot, missed_shot, blocked_shot, penalty, faceoff, hit, giveaway, takeaway, goalie_change, penalty_shot, shootout_attempt, timeout, note.
+    If you leave them out, BLST fills in: <b>period and time</b> from the clock (or pass <code>clock</code> as mm:ss remaining, or <code>elapsed_sec</code>); <b>team</b> from the player's lineup; <b>goalie</b> as whoever is in net; <b>empty_net</b>; <b>strength</b> (from penalties); and <b>penalty_minutes</b> from <code>penalty_severity</code> (minor, double_minor, major, misconduct, game_misconduct, match, bench_minor).
+    Other fields: <code>secondary_player_id</code> (loser, player hit, shooter who was blocked, player who drew the penalty), <code>infraction</code>, <code>coincidental</code>, <code>result</code> (goal/save/miss), <code>on_ice_home</code>/<code>on_ice_away</code> (for +/-), <code>notes</code>.</p></div>
+
+    <h2>Management <span class="badge">admin</span></h2>
+    <div class="card table-wrap"><table>
+      <tr><td class="m">POST</td><td><code>/tournaments</code></td><td><code>{name, num_teams, team_names?, periods, period_length_min, ot_length_min, skaters_per_side, allow_ties, points_win, points_otl, points_tie, …}</code></td></tr>
+      <tr><td class="m">PATCH</td><td><code>/tournaments/:id</code></td><td>Any field. <code>num_teams</code> adds placeholder teams or removes empty ones</td></tr>
+      <tr><td class="m">POST/PATCH/DELETE</td><td><code>/tournaments/:id/teams</code>, <code>/teams/:id</code></td><td>name, short_name, color, seed, final_placement, external_id</td></tr>
+      <tr><td class="m">POST/PATCH/DELETE</td><td><code>/players</code>, <code>/players/:id</code></td><td>first_name, last_name, email, position, shoots, preferred_number, external_id</td></tr>
+      <tr><td class="m">POST</td><td><code>/tournaments/:id/roster</code></td><td><code>{player_id, team_id, jersey_number, position?, role?}</code></td></tr>
+      <tr><td class="m">PATCH/DELETE</td><td><code>/roster/:entryId</code></td><td>Change number, position or role, or remove</td></tr>
+      <tr><td class="m">POST</td><td><code>/tournaments/:id/roster/move</code></td><td><code>{player_id, to_team_id, jersey_number?, reason?}</code> Logged at <code>GET …/roster/moves</code></td></tr>
+      <tr><td class="m">POST</td><td><code>/tournaments/:id/games</code></td><td><code>{home_team_id, away_team_id, scheduled_at, venue, game_type}</code></td></tr>
+      <tr><td class="m">POST</td><td><code>/tournaments/:id/schedule/round-robin</code></td><td><code>{start_at, interval_minutes, rounds, venue}</code></td></tr>
+      <tr><td class="m">POST</td><td><code>/import/roster/:tournamentId</code></td><td><code>{csv | rows, dry_run?, skip_errors?, create_missing_teams?}</code></td></tr>
+      <tr><td class="m">POST</td><td><code>/import/historical</code></td><td><code>{csv | rows, dry_run?, skip_errors?, create_missing_players?, source?}</code>. <code>GET/DELETE /import/batches</code> lists or undoes imports</td></tr>
+      <tr><td class="m">*</td><td><code>/admin/api-keys</code>, <code>/admin/webhooks</code></td><td>Manage keys and webhooks</td></tr>
+      <tr><td class="m">POST</td><td><code>/tournaments/:id/factions/{link,sync-players,push}</code></td><td>BLPA Factions sync. <code>GET …/factions/preview</code> shows computed points</td></tr>
+    </table>
+    <p class="small">You can also POST a raw CSV body with <code>Content-Type: text/csv</code> to the import endpoints. Options then go in the query string.</p></div>
+
+    <h2 id="webhooks">Webhooks</h2>
+    <div class="card">
+      <p>BLST POSTs to each subscribed URL: <code>{"id": 81, "event": "game.final", "created_at": "…", "data": {…}}</code>. A failed delivery is retried twice (after 5s and 30s). Delivery history is in Admin → Webhooks.</p>
+      <p>Events: <code>game.created</code>, <code>game.started</code>, <code>game.clock</code>, <code>game.period</code>, <code>game.event.created|updated|voided|restored</code>, <code>game.final</code>, <code>game.reopened</code>, <code>game.deleted</code>, <code>roster.added|updated|removed|moved|imported</code>, <code>player.created|updated</code>, <code>team.updated</code>, <code>tournament.created|updated|deleted</code>, <code>schedule.generated</code>. Subscribe with <code>*</code>, exact names, or prefixes like <code>game.*</code>.</p>
+      <p>Headers: <code>X-BLST-Event</code>, <code>X-BLST-Delivery</code>, <code>X-BLST-Timestamp</code>, <code>X-BLST-Signature: sha256=HMAC_SHA256(secret, timestamp + "." + rawBody)</code>.</p>
+<pre>const expected = "sha256=" + crypto.createHmac("sha256", SECRET)
+  .update(req.headers["x-blst-timestamp"] + "." + rawBody).digest("hex");
+if (!crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(req.headers["x-blst-signature"]))) reject();</pre>
+    </div>
+  </main>
+  <script src="/js/common.js"></script>
+  <script src="/js/apidoc.js"></script>
+</body>
+</html>

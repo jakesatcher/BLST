@@ -73,6 +73,8 @@ function pgToHttp(err) {
   switch (err && err.code) {
     case "23505":
       return conflict(uniqueMessage(err));
+    case "23502":
+      return badRequest(`${err.column || "a required field"} can't be blank`);
     case "23503":
       return badRequest("referenced record does not exist");
     case "23514":
