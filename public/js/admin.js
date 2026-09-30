@@ -1,5 +1,5 @@
 (async function () {
-  const { h, mount, api, get, $, topbar, tabs, table, toast, setToken, fmtDate, statusBadge, teamDot, debounce } = BLST;
+  const { h, mount, api, get, $, topbar, tabs, table, toast, setToken, fmtDate, statusBadge, teamDot, debounce, confirmSheet, formSheet, openSheet } = BLST;
   $("#top").replaceWith(topbar("admin"));
   const app = $("#app");
 
@@ -7,11 +7,11 @@
   if (me.role !== "admin") return renderLogin();
 
   function renderLogin() {
-    const input = h("input", { type: "password", placeholder: "Admin token or admin API key", autocomplete: "off", style: { minWidth: "300px" } });
-    mount(app, h("div", { class: "card", style: { maxWidth: "560px" } },
+    const input = h("input", { type: "password", placeholder: "Admin password", autocomplete: "off", style: { width: "100%" } });
+    mount(app, h("div", { class: "card", style: { maxWidth: "560px", margin: "24px auto" } },
       h("h1", null, "Admin sign-in"),
-      h("p", { class: "muted" }, "Paste the server's ADMIN_TOKEN or an API key with the admin role. It's kept in this browser only."),
-      h("form", { class: "row", onsubmit: async (e) => {
+      h("p", { class: "muted" }, "Enter the admin password: the server's ADMIN_TOKEN (on Heroku: Settings → Reveal Config Vars), or an admin API key. This device remembers it until you sign out."),
+      h("form", { class: "stack", onsubmit: async (e) => {
         e.preventDefault();
         setToken(input.value.trim());
         const who = await get("/me").catch(() => ({ role: null }));
@@ -20,7 +20,7 @@
           return toast("Not an admin key", true);
         }
         location.reload();
-      } }, input, h("button", { class: "primary" }, "Sign in"))));
+      } }, input, h("button", { class: "primary", style: { width: "100%" } }, "Sign in"))));
   }
 
   // -------------------------------------------------------------------------
@@ -43,11 +43,6 @@
   const select = (name, options, value, attrs = {}) =>
     h("select", { name, ...attrs }, options.map((o) => (Array.isArray(o) ? h("option", { value: o[0], selected: String(o[0]) === String(value) }, o[1]) : h("option", { value: o, selected: String(o) === String(value) }, o))));
   const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
-  const localInput = (iso) => {
-    if (!iso) return "";
-    const d = new Date(iso);
-    return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
-  };
   async function run(fn, okMsg) {
     try {
       const r = await fn();
@@ -86,8 +81,7 @@
     (t) => { history.replaceState(null, "", `#${t}`); show(t); }, location.hash.slice(1).split("/")[0] || "tournaments");
   mount(app,
     h("div", { class: "row between" }, h("h1", null, "Admin"),
-      h("span", { class: "muted small" }, `Signed in (${me.via === "dev-open" ? "dev mode — no ADMIN_TOKEN set" : me.key_name || "admin token"}) `,
-        h("button", { class: "ghost sm", onclick: () => { setToken(""); location.reload(); } }, "Sign out"))),
+      me.via === "dev-open" ? h("span", { class: "badge" }, "dev mode: no ADMIN_TOKEN set") : ""),
     mainTabs.el, view);
 
   function show(tab) {
@@ -118,8 +112,31 @@
     const sub = h("div");
     const subTabs = tabs([["teams", "Teams & rosters"], ["schedule", "Schedule"], ["import", "Roster import"], ["moves", "Moves"], ["settings", "Settings"], ["factions", "Factions sync"]],
       (s) => tournamentSub(s, t, sub), "teams");
-    mount(body, subTabs.el, sub);
+    const checklist = h("div");
+    mount(body, checklist, subTabs.el, sub);
     tournamentSub("teams", t, sub);
+    renderChecklist(t, checklist, subTabs).catch(() => {});
+  }
+
+  /** Setup steps for a tournament; hides itself once everything is done. */
+  async function renderChecklist(t, el, subTabs) {
+    const [games, keys] = await Promise.all([get(`/tournaments/${t.id}/games`), get("/admin/api-keys")]);
+    const steps = [
+      ["Create the tournament", true],
+      ["Name your teams and pick colors", t.teams.length > 0 && !t.teams.some((x) => /^Team \d+$/.test(x.name)), "Teams & rosters", () => subTabs.set("teams")],
+      ["Put players on every team (or import a roster CSV)", t.teams.length > 0 && t.teams.every((x) => x.player_count > 0), "Add players", () => subTabs.set("teams")],
+      ["Schedule games", games.length > 0, "Schedule", () => subTabs.set("schedule")],
+      ["Create a scorekeeper key for each rink device", keys.some((k) => k.role === "scorekeeper" && !k.revoked_at), "API keys", () => mainTabs.set("keys")],
+      ["Score a game", games.some((g) => g.status !== "scheduled"), "Open scorekeeper", () => (location.href = "/scorekeeper.html")],
+    ];
+    const done = steps.filter((x) => x[1]).length;
+    if (done === steps.length) return mount(el);
+    mount(el, h("div", { class: "card" },
+      h("div", { class: "row between" }, h("h2", { style: { margin: 0 } }, "Getting started"), h("span", { class: "muted small" }, `${done} of ${steps.length} done`)),
+      h("ol", { class: "checklist", style: { marginTop: "12px" } }, steps.map(([label, ok, cta, go], i) =>
+        h("li", { class: ok ? "done" : null },
+          h("span", { class: "lbl" }, h("span", { class: "tick" }, ok ? "✓" : i + 1), label),
+          !ok && cta ? h("button", { class: "sm primary", onclick: go }, cta) : "")))));
   }
 
   function tournamentFormFields(t = {}) {
@@ -185,7 +202,12 @@
         h("div", { class: "wide row" }, h("button", { class: "primary" }, "Save settings"))),
       h("hr", { style: { margin: "20px 0", border: 0, borderTop: "1px solid var(--border)" } }),
       h("button", { class: "danger", onclick: async () => {
-        if (prompt(`Type the tournament name to delete it and ALL of its games and stats:\n${t.name}`) !== t.name) return;
+        const ok = await formSheet("Delete tournament", [{ name: "name", label: `Type "${t.name}" to confirm`, required: true }], {
+          intro: "This permanently deletes the tournament with all of its teams, games, events and stats. Players and imported history are kept.",
+          submitLabel: "Delete forever", danger: true,
+          validate: (v) => (v.name === t.name ? null : "The name doesn't match"),
+        });
+        if (!ok) return;
         await run(() => api("DELETE", `/tournaments/${t.id}?confirm=true`), "Deleted");
         selectedTid = null;
         tournamentsView();
@@ -198,7 +220,6 @@
     const numSelect = select("num_teams", range(2, 32), teams.length);
 
     const teamCard = (team) => {
-      const others = teams.filter((x) => x.id !== team.id);
       return h("div", { class: "card" },
         h("form", { class: "form", onsubmit: async (e) => {
           e.preventDefault();
@@ -212,7 +233,7 @@
           field("Final place", input("final_placement", { type: "number", min: 1, value: team.final_placement ?? "", title: "Set after playoffs; 1 = champion" })),
           h("div", { class: "row" }, h("button", { class: "sm" }, "Save"),
             h("button", { type: "button", class: "sm danger", onclick: async () => {
-              if (!confirm(`Delete ${team.name}? Players are removed from the roster (not deleted).`)) return;
+              if (!(await confirmSheet(`Delete ${team.name}? Its players come off the roster (they aren't deleted).`, { title: "Delete team", confirmLabel: "Delete", danger: true }))) return;
               await run(() => api("DELETE", `/teams/${team.id}`), "Team deleted");
               refresh();
             } }, "Delete"))),
@@ -221,34 +242,63 @@
           { key: "jersey_number", label: "#", num: true },
           { key: "last_name", label: "Player", fmt: (r) => h("span", null, `${r.first_name} ${r.last_name}`, r.role ? ` (${r.role})` : "") },
           { key: "position", label: "Pos" },
-          { key: "actions", label: "", sort: false, fmt: (r) => h("div", { class: "actions" },
-            h("button", { class: "sm", onclick: async () => {
-              const n = prompt(`Jersey number for ${r.first_name} ${r.last_name}`, r.jersey_number ?? "");
-              if (n === null) return;
-              const pos = prompt("Position (C, LW, RW, F, D, G) — blank to keep", r.position || "");
-              const body = { jersey_number: n === "" ? null : Number(n) };
-              if (pos) body.position = pos.toUpperCase();
-              await run(() => api("PATCH", `/roster/${r.roster_entry_id}`, body), "Updated");
-              refresh();
-            } }, "Edit"),
-            others.length ? select("to", [["", "Move to…"], ...others.map((o) => [o.id, o.name])], "", { onchange: async (e) => {
-              const to = Number(e.target.value);
-              if (!to) return;
-              const reason = prompt(`Move ${r.first_name} ${r.last_name} to ${others.find((o) => o.id === to).name}?\nReason (optional):`, "");
-              if (reason === null) return (e.target.value = "");
-              const number = prompt("Jersey number on the new team (blank = keep current)", r.jersey_number ?? "");
-              const body = { player_id: r.id, to_team_id: to, reason: reason || undefined };
-              if (number !== null && number !== String(r.jersey_number ?? "")) body.jersey_number = number === "" ? null : Number(number);
-              await run(() => api("POST", `/tournaments/${t.id}/roster/move`, body), "Player moved");
-              refresh();
-            } }) : "",
-            h("button", { class: "sm danger", onclick: async () => {
-              if (!confirm(`Remove ${r.first_name} ${r.last_name} from ${team.name}?`)) return;
-              await run(() => api("DELETE", `/roster/${r.roster_entry_id}`), "Removed");
-              refresh();
-            } }, "✕")) },
-        ], team.roster, { sortKey: "jersey_number", sortDir: 1 }));
+          { key: "edit", label: "", sort: false, fmt: () => "Edit ›" },
+        ], team.roster, { sortKey: "jersey_number", sortDir: 1, rowClass: () => "tap", onRow: (r) => editRosterEntry(r, team) }));
     };
+
+    function editRosterEntry(r, team) {
+      const num = input("jersey_number", { type: "number", inputmode: "numeric", min: 0, max: 99, value: r.jersey_number ?? "" });
+      const pos = select("position", [["", "—"], "C", "LW", "RW", "F", "D", "G"], r.position || "");
+      const role = select("role", [["", "—"], ["C", "Captain"], ["A", "Alternate"]], r.role || "");
+      const teamSel = select("team", teams.map((x) => [x.id, x.id === team.id ? `${x.name} (current)` : x.name]), team.id);
+      const reason = input("reason", { placeholder: "e.g. balancing teams" });
+      const reasonRow = field("Reason for the move (optional)", reason, "hidden");
+      const taken = h("span", { class: "small muted" });
+      const showTaken = () => {
+        const target = teams.find((x) => x.id === Number(teamSel.value));
+        const nums = target.roster.filter((x) => x.id !== r.id && x.jersey_number != null).map((x) => x.jersey_number).sort((a, b) => a - b);
+        taken.textContent = nums.length ? `Taken on ${target.short_name || target.name}: ${nums.join(", ")}` : "";
+        const clash = nums.includes(num.value === "" ? null : Number(num.value));
+        taken.style.color = clash ? "var(--danger)" : "";
+      };
+      teamSel.addEventListener("change", () => {
+        reasonRow.classList.toggle("hidden", Number(teamSel.value) === team.id);
+        showTaken();
+      });
+      num.addEventListener("input", showTaken);
+      const err = h("div", { class: "notice error hidden" });
+      openSheet(`#${r.jersey_number ?? "?"} ${r.first_name} ${r.last_name}`, h("div", { class: "stack" },
+        h("label", null, "Jersey number", num, taken), field("Position", pos), field("Captain / alternate", role),
+        field("Team", teamSel, null), reasonRow,
+        h("p", { class: "muted small", style: { margin: 0 } }, "Moving keeps stats from games already played with the old team."), err), (close) => [
+        h("button", { type: "button", class: "danger", style: { marginRight: "auto" }, onclick: async () => {
+          close();
+          if (!(await confirmSheet(`Take ${r.first_name} ${r.last_name} off ${team.name}? They stay in the player database.`, { title: "Remove from team", confirmLabel: "Remove", danger: true }))) return;
+          await run(() => api("DELETE", `/roster/${r.roster_entry_id}`), "Removed");
+          refresh();
+        } }, "Remove"),
+        h("button", { type: "button", onclick: () => close() }, "Cancel"),
+        h("button", { type: "button", class: "primary", onclick: async () => {
+          const number = num.value === "" ? null : Number(num.value);
+          const to = Number(teamSel.value);
+          try {
+            if (to !== team.id) {
+              await api("POST", `/tournaments/${t.id}/roster/move`, { player_id: r.id, to_team_id: to, jersey_number: number, reason: reason.value || undefined });
+              await api("PATCH", `/roster/${r.roster_entry_id}`, { position: pos.value || null, role: role.value || null });
+              toast(`Moved to ${teams.find((x) => x.id === to).name}`);
+            } else {
+              await api("PATCH", `/roster/${r.roster_entry_id}`, { jersey_number: number, position: pos.value || null, role: role.value || null });
+              toast("Saved");
+            }
+            close();
+            refresh();
+          } catch (e) {
+            err.textContent = e.message;
+            err.classList.remove("hidden");
+          }
+        } }, "Save"),
+      ]);
+    }
 
     // Add player: search existing or create new.
     const results = h("div", { class: "stack", style: { marginTop: "8px" } });
@@ -337,14 +387,18 @@
             h("a", { class: "btn sm", href: `/scorekeeper.html?game=${g.id}` }, "Score"),
             h("a", { class: "btn sm", href: `/game.html?id=${g.id}`, target: "_blank" }, "View"),
             h("button", { class: "sm", onclick: async () => {
-              const v = prompt("Start time (YYYY-MM-DDTHH:MM, local)", localInput(g.scheduled_at));
-              if (v === null) return;
-              await run(() => api("PATCH", `/games/${g.id}`, { scheduled_at: v ? new Date(v).toISOString() : null }), "Rescheduled");
+              const v = await formSheet(`${g.away_team} @ ${g.home_team}`, [
+                { name: "scheduled_at", label: "Start time", type: "datetime", value: g.scheduled_at },
+                { name: "venue", label: "Rink", value: g.venue || "" },
+                { name: "game_type", label: "Type", type: "select", value: g.game_type, options: [["pool", "Pool play"], ["playoff", "Playoff"], ["final", "Final"], ["exhibition", "Exhibition"]] },
+              ], { submitLabel: "Save" });
+              if (!v) return;
+              await run(() => api("PATCH", `/games/${g.id}`, v), "Game updated");
               refresh();
-            } }, "Time"),
+            } }, "Edit"),
             h("button", { class: "sm danger", onclick: async () => {
               const started = g.status !== "scheduled";
-              if (!confirm(started ? "This game has events. Delete it and all its stats?" : "Delete this game?")) return;
+              if (!(await confirmSheet(started ? "This game has been played. Deleting it removes all of its events and stats." : "Delete this game from the schedule?", { title: "Delete game", confirmLabel: "Delete", danger: true }))) return;
               await run(() => api("DELETE", `/games/${g.id}${started ? "?force=true" : ""}`), "Deleted");
               refresh();
             } }, "✕")) },
@@ -469,11 +523,11 @@
           load();
         } }, playerFields(p), h("div", { class: "row" }, h("button", { class: "primary" }, "Save"),
           h("button", { type: "button", class: "danger", onclick: async () => {
-            if (!confirm(`Delete ${p.first_name} ${p.last_name}?`)) return;
+            if (!(await confirmSheet(`Delete ${p.first_name} ${p.last_name} from the player database?`, { title: "Delete player", confirmLabel: "Delete", danger: true }))) return;
             try {
               await api("DELETE", `/players/${id}`);
             } catch (err) {
-              if (!confirm(`${err.message}\n\nDelete anyway?`)) return;
+              if (!(await confirmSheet(`${err.message}`, { title: "Player has game records", confirmLabel: "Delete anyway", danger: true }))) return;
               await run(() => api("DELETE", `/players/${id}?force=true`));
             }
             toast("Deleted");
@@ -532,7 +586,7 @@
         { key: "imported_at", label: "Imported", fmt: (b) => fmtDate(b.imported_at) }, { key: "source", label: "Source" },
         { key: "rows", label: "Rows", num: true }, { key: "import_batch", label: "Batch" },
         { key: "x", label: "", sort: false, fmt: (b) => h("button", { class: "sm danger", onclick: async () => {
-          if (!confirm(`Delete all ${b.rows} rows from this import?`)) return;
+          if (!(await confirmSheet(`Delete all ${b.rows} stat lines from this import?`, { title: "Undo import", confirmLabel: "Delete rows", danger: true }))) return;
           await run(() => api("DELETE", `/import/batches/${encodeURIComponent(b.import_batch)}`), "Batch deleted");
           loadBatches();
         } }, "Undo import") },
@@ -586,7 +640,7 @@
         { key: "created_at", label: "Created", fmt: (k) => fmtDate(k.created_at) },
         { key: "last_used_at", label: "Last used", fmt: (k) => (k.last_used_at ? fmtDate(k.last_used_at) : "never") },
         { key: "revoked_at", label: "", sort: false, fmt: (k) => (k.revoked_at ? h("span", { class: "badge" }, "revoked") : h("button", { class: "sm danger", onclick: async () => {
-          if (!confirm(`Revoke ${k.name}?`)) return;
+          if (!(await confirmSheet(`Revoke "${k.name}"? Any device using it is signed out immediately.`, { title: "Revoke key", confirmLabel: "Revoke", danger: true }))) return;
           await run(() => api("DELETE", `/admin/api-keys/${k.id}`), "Revoked");
           keysView();
         } }, "Revoke")) },
@@ -621,7 +675,7 @@
         { key: "x", label: "", sort: false, fmt: (w) => h("div", { class: "row", style: { justifyContent: "flex-end" } },
           h("button", { class: "sm", onclick: async () => { await run(() => api("POST", `/admin/webhooks/${w.id}/test`), "Ping sent"); setTimeout(() => showDeliveries(w), 800); } }, "Test"),
           h("button", { class: "sm", onclick: () => showDeliveries(w) }, "Deliveries"),
-          h("button", { class: "sm danger", onclick: async () => { if (confirm(`Delete ${w.name}?`)) { await run(() => api("DELETE", `/admin/webhooks/${w.id}`), "Deleted"); webhooksView(); } } }, "✕")) },
+          h("button", { class: "sm danger", onclick: async () => { if (await confirmSheet(`Delete the webhook "${w.name}"?`, { title: "Delete webhook", confirmLabel: "Delete", danger: true })) { await run(() => api("DELETE", `/admin/webhooks/${w.id}`), "Deleted"); webhooksView(); } } }, "✕")) },
       ], hooks)),
       deliveries);
     async function showDeliveries(w) {

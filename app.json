@@ -1,0 +1,44 @@
+{
+  "name": "BLST — BLPA Live Scoring",
+  "description": "Live scoring and stat tracking for BLPA hockey tournaments, with an iPad-friendly scorekeeper and public live scoreboards.",
+  "repository": "https://github.com/jakesatcher/BLST",
+  "keywords": ["hockey", "scoring", "stats", "express", "postgres"],
+  "stack": "heroku-24",
+  "buildpacks": [{ "url": "heroku/nodejs" }],
+  "formation": { "web": { "quantity": 1 } },
+  "addons": [{ "plan": "heroku-postgresql:essential-0" }],
+  "env": {
+    "ADMIN_TOKEN": {
+      "description": "Admin password for the web app. Auto-generated: find it later under Settings → Reveal Config Vars.",
+      "generator": "secret"
+    },
+    "SEED_DEMO": {
+      "description": "\"true\" loads a demo tournament (4 teams, 2 finished games, 1 live game) on first deploy so you can try things out. Delete it from Admin → Settings when you're done.",
+      "value": "true",
+      "required": false
+    },
+    "PUBLIC_EXPORTS": {
+      "description": "\"true\" lets anyone call the export API (like the public scoreboards). \"false\" requires an API key.",
+      "value": "true",
+      "required": false
+    },
+    "FACTIONS_BASE_URL": {
+      "description": "Optional: URL of your BLPA Factions app, e.g. https://your-factions-app.herokuapp.com",
+      "value": "",
+      "required": false
+    },
+    "FACTIONS_ADMIN_TOKEN": {
+      "description": "Optional: the BLPA Factions app's ADMIN_TOKEN.",
+      "value": "",
+      "required": false
+    },
+    "FACTIONS_AUTO_SYNC": {
+      "description": "Optional: \"true\" pushes results to Factions automatically after every final.",
+      "value": "false",
+      "required": false
+    }
+  },
+  "scripts": {
+    "postdeploy": "npm run seed -- --if-enabled"
+  }
+}

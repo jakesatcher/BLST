@@ -1,5 +1,5 @@
 (async function () {
-  const { h, mount, api, get, $, param, topbar, stream, toast, fmtClock, fmtSec, fmtDate, statusBadge, teamDot, setToken } = BLST;
+  const { h, mount, api, get, $, param, topbar, stream, toast, fmtClock, fmtSec, fmtDate, statusBadge, teamDot, setToken, confirmSheet, formSheet } = BLST;
   $("#top").replaceWith(topbar("scorekeeper"));
   const app = $("#app");
   const gameId = Number(param("game"));
@@ -12,11 +12,11 @@
   if (!gameId) return renderPicker();
 
   function renderLogin() {
-    const input = h("input", { type: "password", placeholder: "Scorekeeper or admin key", autocomplete: "off", style: { minWidth: "280px" } });
-    mount(app, h("div", { class: "card", style: { maxWidth: "520px" } },
+    const input = h("input", { type: "password", placeholder: "Paste your scorekeeper key", autocomplete: "off", style: { width: "100%" } });
+    mount(app, h("div", { class: "card", style: { maxWidth: "520px", margin: "24px auto" } },
       h("h1", null, "Scorekeeper sign-in"),
-      h("p", { class: "muted" }, "Paste the API key an admin created for this rink (role: scorekeeper), or the admin token."),
-      h("form", { class: "row", onsubmit: async (e) => {
+      h("p", { class: "muted" }, "Use the scorekeeper key your admin gave you (Admin → API keys), or the admin password. This device remembers it until you sign out."),
+      h("form", { class: "stack", onsubmit: async (e) => {
         e.preventDefault();
         setToken(input.value.trim());
         me = await get("/me").catch(() => ({ role: null }));
@@ -25,22 +25,24 @@
           return toast("That key can't score games", true);
         }
         location.reload();
-      } }, input, h("button", { class: "primary" }, "Sign in"))));
+      } }, input, h("button", { class: "primary", style: { width: "100%" } }, "Sign in"))));
   }
 
   async function renderPicker() {
-    const live = await get("/games");
+    const games = await get("/games");
+    const card = (g) => h("a", { class: "card", href: `/scorekeeper.html?game=${g.id}` },
+      h("div", { class: "row between" }, statusBadge(g), h("span", { class: "muted small" }, fmtDate(g.scheduled_at))),
+      h("div", { class: "teams", style: { marginTop: "8px" } }, teamDot(g.away_color), g.away_team, g.status !== "scheduled" ? ` ${g.away_score}` : ""),
+      h("div", { class: "teams" }, teamDot(g.home_color), g.home_team, g.status !== "scheduled" ? ` ${g.home_score}` : ""),
+      h("div", { class: "muted small", style: { marginTop: "6px" } }, [g.tournament_name, g.venue].filter(Boolean).join(" · ")));
+    const group = (title, list) => (list.length ? [h("h2", { style: { marginTop: "18px" } }, title), h("div", { class: "pick" }, list.map(card))] : "");
+    const live = games.filter((g) => g.status === "live" || g.status === "intermission");
+    const next = games.filter((g) => g.status === "scheduled");
+    const done = games.filter((g) => g.status === "final");
     mount(app,
-      h("div", { class: "row between" }, h("h1", null, "Pick a game to score"), h("button", { class: "ghost sm", onclick: () => { setToken(""); location.reload(); } }, "Sign out")),
-      live.length
-        ? h("div", { class: "card" }, h("table", null, h("tbody", null, live.map((g) =>
-            h("tr", null,
-              h("td", null, statusBadge(g)),
-              h("td", null, `${g.away_team} @ ${g.home_team}`),
-              h("td", { class: "muted small" }, g.tournament_name),
-              h("td", { class: "muted small" }, fmtDate(g.scheduled_at)),
-              h("td", { class: "num" }, h("a", { class: "btn", href: `/scorekeeper.html?game=${g.id}` }, g.status === "final" ? "Review" : "Score")))))))
-        : h("p", { class: "empty" }, "No live or upcoming games. Schedule games in Admin."));
+      h("h1", null, "Pick a game to score"),
+      games.length ? [group("Live now", live), group("Up next", next), group("Finished (tap to correct)", done)]
+        : h("div", { class: "card empty" }, "No live or upcoming games. An admin can schedule games in Admin → Tournaments → Schedule."));
   }
 
   // -------------------------------------------------------------------------
@@ -49,16 +51,14 @@
   let snap = null;
   let raw = [];
   let remaining = () => 0;
-  const clockCard = h("div", { class: "card sk-clock" });
+  const clockCard = h("div", { class: "card sk-bar" });
   const teamsRow = h("div", { class: "grid two" });
   const logCard = h("div", { class: "card" });
   const lineupCard = h("div", { class: "card" });
+  let pill = h("span");
 
-  mount(app,
-    h("div", { class: "row between small", style: { marginBottom: "8px" } },
-      h("a", { href: "/scorekeeper.html" }, "← All games"),
-      h("span", null, h("a", { href: `/game.html?id=${gameId}`, target: "_blank" }, "Public view ↗"))),
-    clockCard, teamsRow, logCard, lineupCard);
+  mount(app, clockCard, teamsRow, logCard, lineupCard);
+  BLST.keepAwake();
 
   const side = (which) => (which === "home" ? snap.home : snap.away);
   const other = (which) => (which === "home" ? "away" : "home");
@@ -73,10 +73,11 @@
       if (okMsg) toast(okMsg);
       return res;
     } catch (err) {
-      toast(err.message, true);
+      toast(err.message === "Failed to fetch" ? "No connection: that wasn't saved. Try again." : err.message, true);
       throw err;
     }
   }
+  const quiet = (p) => p.catch(() => {});
 
   async function apply(s) {
     snap = s;
@@ -89,55 +90,67 @@
   }
 
   // -------------------------------------------------------------------------
-  // Clock & periods
+  // Scoreboard + clock bar (sticky on iPad)
 
   function renderClock() {
     const g = snap.game;
     const running = g.clock_running;
-    const btn = (label, onclick, cls, disabled) => h("button", { class: cls, onclick, disabled }, label);
     const inPlay = g.status === "live" || g.status === "intermission";
+    const btn = (label, onclick, cls, disabled) => h("button", { type: "button", class: cls, onclick, disabled }, label);
+    const sideBox = (which) => {
+      const s = side(which);
+      return h("div", { class: `side ${which}` },
+        h("div", { class: "nm" }, which === "home" ? "" : teamDot(s.color), s.short_name || s.name, which === "home" ? [" ", teamDot(s.color)] : ""),
+        h("div", { class: "sc" }, s.score),
+        h("div", { class: "muted small" }, `SOG ${s.shots}`, s.goalie ? "" : h("strong", { style: { color: "var(--danger)" } }, " · EMPTY NET")));
+    };
+    const periodText = g.status === "intermission" ? `${g.period_label} · INT` : g.status === "final" ? `FINAL${g.decision && g.decision !== "REG" ? `/${g.decision}` : ""}` : g.status === "scheduled" ? "Not started" : g.period_label;
+
     let controls;
     if (g.status === "scheduled") {
       const pick = (which) => {
-        const goalies = snap.lineups[which].filter((p) => p.dressed);
-        return h("label", null, `${side(which).name} starting goalie`,
-          h("select", { id: `start-${which}` }, h("option", { value: "" }, "Auto (first G on roster)"),
-            goalies.sort((a, b) => (a.position === "G" ? -1 : 1) - (b.position === "G" ? -1 : 1)).map((p) => h("option", { value: p.player_id }, `#${p.number ?? "?"} ${p.name}${p.position === "G" ? " (G)" : ""}`))));
+        const goalies = snap.lineups[which].filter((p) => p.dressed)
+          .sort((a, b) => (a.position === "G" ? -1 : 1) - (b.position === "G" ? -1 : 1));
+        return h("label", null, `${side(which).name} goalie`,
+          h("select", { id: `start-${which}` }, h("option", { value: "" }, "Auto (first goalie on roster)"),
+            goalies.map((p) => h("option", { value: p.player_id }, `#${p.number ?? "?"} ${p.name}${p.position === "G" ? " (G)" : ""}`))));
       };
-      controls = h("div", { class: "stack" },
+      controls = h("div", { class: "stack", style: { marginTop: "10px" } },
         h("div", { class: "row", style: { justifyContent: "center" } }, pick("away"), pick("home")),
-        btn("Start game", () => {
+        h("div", { class: "sk-controls" }, btn("Start game", () => {
           const body = {};
           for (const w of ["home", "away"]) {
             const v = $(`#start-${w}`).value;
             if (v) body[`${w}_goalie_id`] = Number(v);
           }
-          act("POST", "/start", body, "Game started — press Start clock at the drop of the puck");
-        }, "primary"));
+          quiet(act("POST", "/start", body, "Game started. Tap Start clock at the drop of the puck."));
+        }, "primary go")));
     } else {
-      controls = h("div", { class: "stack" },
-        h("div", { class: "row", style: { justifyContent: "center" } },
-          btn(running ? "Stop clock (space)" : "Start clock (space)", toggleClock, running ? "danger solid" : "primary", !inPlay),
-          btn("−10s", () => act("POST", "/clock", { action: "adjust", delta_sec: -10 }), "", !inPlay || running),
-          btn("−1s", () => act("POST", "/clock", { action: "adjust", delta_sec: -1 }), "", !inPlay || running),
-          btn("+1s", () => act("POST", "/clock", { action: "adjust", delta_sec: 1 }), "", !inPlay || running),
-          btn("+10s", () => act("POST", "/clock", { action: "adjust", delta_sec: 10 }), "", !inPlay || running),
-          btn("Set…", setClock, "", !inPlay || running)),
-        h("div", { class: "row", style: { justifyContent: "center" } },
-          btn("End period", () => confirm(`End the ${g.period_label} period?`) && act("POST", "/period/end", undefined, "Period ended"), "", g.status !== "live"),
-          btn(g.period >= snap.tournament.periods ? "Start overtime" : "Next period", () => act("POST", "/period/next", undefined, "Next period ready"), "", !inPlay),
-          btn("End game", endGame, "danger", !inPlay),
-          g.status === "final" ? btn("Reopen game", () => confirm("Reopen this game for corrections?") && act("POST", "/reopen", undefined, "Game reopened"), "") : ""),
-        h("p", { class: "muted small" }, "−10s takes ten seconds off the displayed clock; +10s puts ten back. Stop the clock to adjust."));
+      const adj = (label, delta) => btn(label, () => quiet(act("POST", "/clock", { action: "adjust", delta_sec: delta })), "", !inPlay || running);
+      controls = h("div", { class: "sk-controls" },
+        btn(running ? "■ Stop clock" : "▶ Start clock", toggleClock, `go ${running ? "danger solid" : "primary"}`, !inPlay),
+        adj("−10s", -10), adj("−1s", -1), adj("+1s", 1), adj("+10s", 10),
+        btn("Set…", setClock, "", !inPlay || running),
+        btn("↶ Undo last", undoLast, "", !raw.some((e) => !e.voided)),
+        g.status === "live" ? btn("End period", endPeriod, "", false) : "",
+        g.status === "intermission" || (g.status === "live" && remaining() === 0)
+          ? btn(g.period >= snap.tournament.periods ? "Start overtime" : "Next period", () => quiet(act("POST", "/period/next", undefined, "Next period ready")), "primary", false) : "",
+        inPlay ? btn("End game", endGame, "danger", false) : "",
+        g.status === "final" ? btn("Reopen game", reopen, "", false) : "");
     }
-    const pens = snap.active_penalties;
+
     mount(clockCard,
-      h("div", { class: "row between" },
-        h("div", { style: { textAlign: "left" } }, h("strong", null, `${snap.away.name} @ ${snap.home.name}`), h("div", { class: "muted small" }, snap.tournament.name)),
-        statusBadge(g)),
-      h("div", { class: "period muted", style: { fontWeight: 700, marginTop: "8px" } }, g.status === "intermission" ? `${g.period_label} — intermission` : g.status === "final" ? `Final ${g.decision && g.decision !== "REG" ? g.decision : ""}` : g.period_label),
-      h("div", { class: `clock mono ${running ? "" : "muted"}`, id: "sk-clock", style: { fontWeight: 800 } }, fmtClock(remaining())),
-      pens.length ? h("div", { class: "small", id: "sk-pens", style: { margin: "6px 0 10px" } }) : "",
+      h("div", { class: "row between small", style: { marginBottom: "6px" } },
+        h("a", { href: "/scorekeeper.html" }, "← Games"),
+        h("span", { class: "muted" }, snap.tournament.name),
+        h("span", { class: "row" }, pill, h("a", { href: `/game.html?id=${gameId}`, target: "_blank" }, "Public view ↗"))),
+      h("div", { class: "sk-score" },
+        sideBox("away"),
+        h("div", { class: "mid" },
+          h("div", { class: "muted", style: { fontWeight: 700 } }, periodText),
+          h("div", { class: `clock ${running ? "" : "muted"}`, id: "sk-clock" }, g.status === "final" ? "—" : fmtClock(remaining())),
+          h("div", { class: "small", id: "sk-pens" })),
+        sideBox("home")),
       controls);
     tickPens();
   }
@@ -149,30 +162,57 @@
     mount(el, snap.active_penalties.map((p) => {
       const left = p.queued ? p.end_abs - p.start_abs : Math.max(0, p.end_abs - absNow);
       const team = p.team_id === snap.home.id ? snap.home : snap.away;
-      return h("span", { class: "badge pp", style: { margin: "2px" } }, `${team.short_name || team.name} ${p.player ? p.player.name : "Bench"} ${fmtSec(left)}${p.queued ? " (waiting)" : ""}`);
+      return h("span", { class: "badge pp", style: { margin: "2px" } }, `${team.short_name || team.name} ${p.player ? `#${p.player.number ?? "?"}` : "Bench"} ${fmtSec(left)}${p.queued ? " (waiting)" : ""}`);
     }));
   }
 
   function toggleClock() {
     if (!snap || !["live", "intermission"].includes(snap.game.status)) return;
-    act("POST", "/clock", { action: snap.game.clock_running ? "stop" : "start" });
+    quiet(act("POST", "/clock", { action: snap.game.clock_running ? "stop" : "start" }));
   }
 
-  function setClock() {
-    const v = prompt("Set clock (time remaining, mm:ss)", fmtSec(remaining() / 1000));
-    if (!v) return;
-    const m = /^(\d{1,3}):([0-5]\d)$/.exec(v.trim());
-    if (!m) return toast("Use mm:ss", true);
-    act("POST", "/clock", { action: "set", remaining_sec: Number(m[1]) * 60 + Number(m[2]) });
+  async function setClock() {
+    const v = await formSheet("Set the clock", [
+      { name: "remaining", label: "Time remaining (mm:ss)", type: "clock", value: fmtSec(remaining() / 1000), required: true },
+    ], { submitLabel: "Set clock" });
+    if (v) quiet(act("POST", "/clock", { action: "set", remaining_sec: v.remaining }));
+  }
+
+  async function endPeriod() {
+    if (await confirmSheet(`End the ${snap.game.period_label} period? The clock goes to 0:00 and the game goes to intermission.`, { title: "End period", confirmLabel: "End period" })) {
+      quiet(act("POST", "/period/end", undefined, "Period ended"));
+    }
+  }
+
+  async function reopen() {
+    if (await confirmSheet("Reopen this game to correct events? Stats update as soon as you save a change. End the game again when you're done.", { title: "Reopen game", confirmLabel: "Reopen" })) {
+      quiet(act("POST", "/reopen", undefined, "Game reopened"));
+    }
   }
 
   async function endGame() {
     const tied = snap.home.score === snap.away.score && !snap.events.some((e) => e.type === "shootout_attempt");
-    if (!confirm(tied ? "The score is tied. End the game anyway?" : "End the game and make the result final?")) return;
+    const msg = tied
+      ? "The score is tied. Usually you'd play overtime (Next period) or a shootout first."
+      : `Final score: ${snap.away.name} ${snap.away.score}, ${snap.home.name} ${snap.home.score}.`;
+    if (!(await confirmSheet(msg, { title: "End game", confirmLabel: tied ? "End anyway" : "Make it final", danger: tied }))) return;
     try {
       await act("POST", "/end", {}, "Final");
     } catch (err) {
-      if (err.status === 409 && tied && confirm(`${err.message}\n\nRecord it as a tie anyway?`)) act("POST", "/end", { allow_tie: true }, "Final (tie)");
+      if (err.status === 409 && tied && (await confirmSheet(`${err.message}\n\nRecord it as a tie anyway?`, { title: "Tie game", confirmLabel: "Record tie", danger: true }))) {
+        quiet(act("POST", "/end", { allow_tie: true }, "Final (tie)"));
+      }
+    }
+  }
+
+  async function undoLast() {
+    const last = [...raw].filter((e) => !e.voided).sort((a, b) => b.id - a.id)[0];
+    if (!last) return;
+    const team = last.team_id ? side(whichOf(last.team_id)) : null;
+    const pub = snap.events.find((e) => e.id === last.id);
+    const who = pub && pub.player ? ` ${pub.player.name}` : "";
+    if (await confirmSheet(`Void the last event entered?\n\n${TITLES[last.type] || last.type}${team ? ` (${team.short_name || team.name})` : ""}${who}, ${BLST.periodLabel(last.period, snap.tournament.periods)} ${fmtSec(periodLen(last.period) - last.elapsed_sec)}\n\nYou can restore it from the event log.`, { title: "Undo last", confirmLabel: "Void it", danger: true })) {
+      quiet(act("DELETE", `/events/${last.id}`, undefined, "Voided"));
     }
   }
 
@@ -183,7 +223,7 @@
   });
 
   setInterval(() => {
-    if (!snap) return;
+    if (!snap || snap.game.status === "final") return;
     const el = $("#sk-clock");
     if (el) el.textContent = fmtClock(remaining());
     if (snap.game.clock_running) tickPens();
@@ -203,9 +243,7 @@
     const panel = (which) => {
       const s = side(which);
       return h("div", { class: "card" },
-        h("div", { class: "row between" },
-          h("h2", { style: { margin: 0 } }, teamDot(s.color), s.name, h("span", { class: "muted small" }, which === "home" ? " (home)" : " (away)")),
-          h("div", { style: { fontSize: "2rem", fontWeight: 900 }, class: "mono" }, s.score)),
+        h("h2", { style: { margin: 0 } }, teamDot(s.color), s.name, h("span", { class: "muted small" }, which === "home" ? " (home)" : " (away)")),
         h("div", { class: "muted small", style: { margin: "4px 0 10px" } },
           `SOG ${s.shots} · PIM ${s.pim} · ${s.skaters_on_ice} skaters · `, s.goalie ? `G: ${s.goalie.name}` : h("strong", { style: { color: "var(--danger)" } }, "EMPTY NET")),
         h("div", { class: "sk-actions" }, ACTIONS.map(([type, label, cls]) =>
@@ -375,6 +413,8 @@
       h("div", { class: "dlg-foot" },
         h("button", { onclick: () => dialog.close() }, "Cancel"),
         h("button", { class: "primary", onclick: save }, existing ? "Save changes" : "Record")));
+    const mine = dialog;
+    mine.addEventListener("close", () => mine.remove());
     document.body.appendChild(dialog);
     renderSlots();
     renderGrid();
@@ -414,9 +454,9 @@
                 h("td", { class: "small" }, detail),
                 h("td", { class: "num" },
                   e.voided
-                    ? h("button", { class: "sm", onclick: () => act("POST", `/events/${e.id}/restore`, undefined, "Restored") }, "Restore")
+                    ? h("button", { class: "sm", onclick: () => quiet(act("POST", `/events/${e.id}/restore`, undefined, "Restored")) }, "Restore")
                     : [h("button", { class: "sm", onclick: () => openEntry(null, e) }, "Edit"), " ",
-                       h("button", { class: "sm danger", onclick: () => confirm("Void this event?") && act("DELETE", `/events/${e.id}`, undefined, "Voided") }, "Void")]));
+                       h("button", { class: "sm danger", onclick: async () => (await confirmSheet("Void this event? It stays in the log and can be restored.", { title: "Void event", confirmLabel: "Void", danger: true })) && quiet(act("DELETE", `/events/${e.id}`, undefined, "Voided")) }, "Void")]));
             }))))
         : h("p", { class: "empty" }, "No events yet"));
   }
@@ -435,8 +475,10 @@
         const found = await get(`/players?q=${encodeURIComponent(q)}&limit=8`);
         mount(results, found.map((p) => h("div", { class: "row between" }, `${p.first_name} ${p.last_name}${p.position ? ` (${p.position})` : ""}`,
           h("button", { class: "sm", onclick: async () => {
-            const num = prompt("Jersey number for this game?", p.preferred_number ?? "");
-            await act("PATCH", "/lineup", { player_id: p.id, team_id: s.id, jersey_number: num === "" || num == null ? undefined : Number(num) }, "Added to lineup");
+            const v = await formSheet(`Add ${p.first_name} ${p.last_name} to ${s.name}`, [
+              { name: "jersey_number", label: "Jersey number for this game", type: "number", min: 0, max: 99, value: p.preferred_number ?? "" },
+            ], { submitLabel: "Add to lineup" });
+            if (v) quiet(act("PATCH", "/lineup", { player_id: p.id, team_id: s.id, jersey_number: v.jersey_number ?? undefined }, "Added to lineup"));
           } }, "Add"))));
       }, 250));
       return h("div", null,
@@ -447,7 +489,7 @@
             h("td", null, p.name, p.position ? h("span", { class: "muted small" }, ` ${p.position}`) : ""),
             h("td", { class: "num" }, h("label", { class: "inline" },
               h("input", { type: "checkbox", checked: p.dressed, disabled: snap.game.status === "scheduled",
-                onchange: (ev) => act("PATCH", "/lineup", { player_id: p.player_id, dressed: ev.target.checked }) }), "Dressed")))))),
+                onchange: (ev) => quiet(act("PATCH", "/lineup", { player_id: p.player_id, dressed: ev.target.checked })) }), "Dressed")))))),
         snap.game.status === "scheduled" ? h("p", { class: "muted small" }, "The lineup is copied from the team roster when the game starts.") : [search, results]);
     };
     mount(lineupCard, h("details", null, h("summary", null, h("strong", null, "Lineups")), h("div", { class: "grid two", style: { marginTop: "12px" } }, block("away"), block("home"))));
@@ -455,5 +497,6 @@
 
   // -------------------------------------------------------------------------
 
-  stream({ game_id: gameId }, { snapshot: (s) => apply(s) });
+  const es = stream({ game_id: gameId }, { snapshot: (s) => apply(s) });
+  pill = BLST.connectionPill(es);
 })().catch((err) => BLST.toast(err.message, true));

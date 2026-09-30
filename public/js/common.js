@@ -225,11 +225,23 @@
       ["admin", "/admin.html", "Admin"],
       ["docs", "/api.html", "API"],
     ];
+    const who = h("span", { class: "who" });
+    if (getToken()) {
+      get("/me")
+        .then((me) => {
+          if (!me.role || me.via === "dev-open") return;
+          mount(who, `Signed in: ${me.role}${me.key_name ? ` (${me.key_name})` : ""} · `,
+            h("a", { href: "#", onclick: (e) => { e.preventDefault(); setToken(""); location.reload(); } }, "Sign out"));
+        })
+        .catch(() => {});
+    }
     return h(
       "header",
       { class: "topbar" },
       h("a", { class: "brand", href: "/" }, "BLST"),
       h("nav", null, links.map(([id, href, label]) => h("a", { href, class: id === active ? "active" : null }, label))),
+      h("span", { class: "spacer" }),
+      who,
     );
   }
 
@@ -341,4 +353,149 @@
   }
 
   Object.assign(window.BLST, { gameCards, periodLabel });
+})();
+
+/* Touch-friendly sheets that replace window.prompt/confirm (clumsy on iPad). */
+(function () {
+  const { h, mount } = window.BLST;
+
+  function openSheet(title, body, actions, { onClose } = {}) {
+    const dlg = h("dialog", { class: "sheet" });
+    let result;
+    const close = (value) => {
+      result = value;
+      dlg.close();
+    };
+    mount(dlg,
+      h("div", { class: "dlg-head" }, h("strong", null, title), h("button", { type: "button", class: "ghost sm", "aria-label": "Close", onclick: () => close(null) }, "✕")),
+      h("div", { class: "dlg-body" }, body),
+      h("div", { class: "dlg-foot" }, actions(close)));
+    dlg.addEventListener("close", () => {
+      dlg.remove();
+      if (onClose) onClose(result === undefined ? null : result);
+    });
+    document.body.appendChild(dlg);
+    dlg.showModal();
+    return { dlg, close };
+  }
+
+  /** Yes/no question. Resolves true/false. */
+  function confirmSheet(message, { title = "Are you sure?", confirmLabel = "OK", danger = false } = {}) {
+    return new Promise((resolve) => {
+      openSheet(title, h("p", { style: { margin: 0, whiteSpace: "pre-line" } }, message), (close) => [
+        h("button", { type: "button", onclick: () => close(false) }, "Cancel"),
+        h("button", { type: "button", class: danger ? "danger solid" : "primary", onclick: () => close(true) }, confirmLabel),
+      ], { onClose: (v) => resolve(Boolean(v)) });
+    });
+  }
+
+  /**
+   * Small form in a sheet. fields: [{name, label, type, value, options, required, placeholder, hint, min, max}]
+   * type: text | number | select | clock (mm:ss) | datetime | date | email | checkbox.
+   * Resolves an object of values, or null if cancelled.
+   */
+  function formSheet(title, fields, { submitLabel = "Save", danger = false, intro, validate } = {}) {
+    return new Promise((resolve) => {
+      const inputs = {};
+      const err = h("div", { class: "notice error hidden" });
+      const localDT = (iso) => {
+        if (!iso) return "";
+        const d = new Date(iso);
+        return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+      };
+      const rows = fields.map((f) => {
+        let el;
+        if (f.type === "select") {
+          el = h("select", null, f.options.map((o) => {
+            const [v, l] = Array.isArray(o) ? o : [o, o];
+            return h("option", { value: v, selected: String(v) === String(f.value ?? "") }, l);
+          }));
+        } else if (f.type === "checkbox") {
+          el = h("input", { type: "checkbox", checked: Boolean(f.value) });
+          inputs[f.name] = el;
+          return h("label", { class: "inline" }, el, f.label);
+        } else {
+          const type = { clock: "text", datetime: "datetime-local", number: "number" }[f.type] || f.type || "text";
+          el = h("input", {
+            type, value: f.type === "datetime" ? localDT(f.value) : f.value ?? "", placeholder: f.placeholder, min: f.min, max: f.max,
+            inputmode: f.type === "number" ? "numeric" : f.type === "clock" ? "numeric" : undefined,
+            pattern: f.type === "clock" ? "\\d{1,3}:[0-5]\\d" : undefined, required: f.required,
+            autocomplete: "off",
+          });
+        }
+        inputs[f.name] = el;
+        return h("label", null, f.label, el, f.hint ? h("span", { class: "small muted" }, f.hint) : "");
+      });
+      const read = () => {
+        const out = {};
+        for (const f of fields) {
+          const el = inputs[f.name];
+          let v = f.type === "checkbox" ? el.checked : el.value.trim();
+          if (f.type !== "checkbox" && v === "") v = null;
+          else if (f.type === "number" && v !== null) v = Number(v);
+          else if (f.type === "datetime" && v !== null) v = new Date(v).toISOString();
+          else if (f.type === "clock" && v !== null) {
+            const m = /^(\d{1,3}):([0-5]\d)$/.exec(v) || /^(\d{1,4})$/.exec(v);
+            if (!m) throw new Error(`${f.label}: use mm:ss`);
+            v = m.length === 3 ? Number(m[1]) * 60 + Number(m[2]) : Number(m[1]);
+          }
+          if (f.required && (v === null || v === "")) throw new Error(`${f.label} is required`);
+          out[f.name] = v;
+        }
+        if (validate) {
+          const msg = validate(out);
+          if (msg) throw new Error(msg);
+        }
+        return out;
+      };
+      const { close } = openSheet(title, h("form", { class: "stack", onsubmit: (e) => { e.preventDefault(); submit(); } },
+        intro ? h("p", { class: "muted", style: { margin: 0 } }, intro) : "", ...rows, err,
+        h("button", { type: "submit", class: "hidden" })), (c) => [
+        h("button", { type: "button", onclick: () => c(null) }, "Cancel"),
+        h("button", { type: "button", class: danger ? "danger solid" : "primary", onclick: () => submit() }, submitLabel),
+      ], { onClose: resolve });
+      function submit() {
+        try {
+          close(read());
+        } catch (e) {
+          err.textContent = e.message;
+          err.classList.remove("hidden");
+        }
+      }
+      const first = Object.values(inputs)[0];
+      if (first && first.type !== "checkbox" && window.matchMedia("(pointer: fine)").matches) first.focus();
+    });
+  }
+
+  /** Keeps the screen awake (iPad on the scorer's table). Re-acquired when the tab comes back. */
+  function keepAwake() {
+    if (!("wakeLock" in navigator)) return;
+    let lock = null;
+    const get = async () => {
+      try {
+        if (document.visibilityState === "visible" && !lock) {
+          lock = await navigator.wakeLock.request("screen");
+          lock.addEventListener("release", () => (lock = null));
+        }
+      } catch {
+        /* denied or unsupported: harmless */
+      }
+    };
+    document.addEventListener("visibilitychange", get);
+    get();
+  }
+
+  /** Small "Live / Reconnecting…" pill wired to an EventSource. */
+  function connectionPill(es) {
+    const pill = h("span", { class: "conn", title: "Live connection" }, "Connecting…");
+    const set = (ok) => {
+      pill.textContent = ok ? "● Live" : "Reconnecting…";
+      pill.classList.toggle("bad", !ok);
+    };
+    es.addEventListener("open", () => set(true));
+    es.addEventListener("error", () => set(false));
+    return pill;
+  }
+
+  Object.assign(window.BLST, { openSheet, confirmSheet, formSheet, keepAwake, connectionPill });
 })();

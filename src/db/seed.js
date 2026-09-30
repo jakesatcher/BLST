@@ -1,6 +1,6 @@
 // Loads a demo tournament: 4 teams, full rosters, a round robin, two
 // finished games, and one game left live in the 2nd period.
-//   npm run seed            (refuses if a "BLST Demo Cup" already exists)
+//   npm run seed            (does nothing if a "BLST Demo Cup" already exists)
 const db = require("./index");
 const control = require("../services/gameControl");
 
@@ -16,6 +16,11 @@ const POS = ["G", "G", "C", "C", "C", "LW", "LW", "RW", "RW", "D", "D", "D", "D"
 const NUMBERS = [30, 35, 9, 19, 91, 11, 17, 22, 27, 4, 5, 44, 77];
 
 async function main() {
+  // Heroku's postdeploy runs this with --if-enabled; only seed when SEED_DEMO=true.
+  if (process.argv.includes("--if-enabled") && !/^(1|true|yes)$/i.test(process.env.SEED_DEMO || "")) {
+    console.log("SEED_DEMO is not true; skipping demo data.");
+    return;
+  }
   await db.migrate({ log: () => {} });
   const exists = await db.one("SELECT id FROM tournaments WHERE name = 'BLST Demo Cup'");
   if (exists) {

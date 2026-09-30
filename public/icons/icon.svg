@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#0e1520"/>
+  <ellipse cx="256" cy="318" rx="150" ry="52" fill="#1b2635"/>
+  <path d="M106 262v56c0 29 67 52 150 52s150-23 150-52v-56" fill="#1b2635"/>
+  <ellipse cx="256" cy="262" rx="150" ry="52" fill="#2b3a50"/>
+  <path d="M142 150 L256 244 L370 150" stroke="#4d9cff" stroke-width="30" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <text x="256" y="452" text-anchor="middle" font-family="Helvetica, Arial, sans-serif" font-weight="800" font-size="92" letter-spacing="6" fill="#f2f5f9">BLST</text>
+</svg>

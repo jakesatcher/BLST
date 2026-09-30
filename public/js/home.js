@@ -9,7 +9,7 @@
   mount(
     app,
     h("h1", null, "Live & upcoming"),
-    cards.el,
+    games.length ? cards.el : h("p", { class: "muted" }, "No games today."),
     h("h2", { style: { marginTop: "28px" } }, "Tournaments"),
     tournaments.length
       ? h(
@@ -25,7 +25,12 @@
             ),
           ),
         )
-      : h("p", { class: "empty" }, "No tournaments yet. Create one in Admin."),
+      : h("div", { class: "card", style: { textAlign: "center", padding: "28px 16px" } },
+          h("h2", null, "Welcome to BLST"),
+          h("p", { class: "muted" }, "No tournaments yet. Set one up in Admin: pick the number of teams, add players, and schedule games. Then score them live from an iPad."),
+          h("div", { class: "row", style: { justifyContent: "center" } },
+            h("a", { class: "btn primary", href: "/admin.html" }, "Set up a tournament"),
+            h("a", { class: "btn", href: "/scorekeeper.html" }, "Scorekeeper"))),
   );
 
   // New games appearing (a game starts that wasn't in the list) just reload the list.

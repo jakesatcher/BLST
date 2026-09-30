@@ -1,0 +1,16 @@
+{
+  "name": "BLST — BLPA Live Scoring",
+  "short_name": "BLST",
+  "description": "Live hockey tournament scoring and stats",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0e1520",
+  "theme_color": "#0e1520",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

@@ -54,19 +54,51 @@ npm test
 
 The suite covers the stat engine (penalty replay, PP/SH, GWG, goalie decisions, OT and shootout, standings) and a full API run-through. That run-through covers auth, the team-count selector, roster import, a live game, roster moves, historical import, exports, signed webhooks, SSE, and Factions sync against a mock that matches the real Factions endpoints.
 
-## Deploying to Heroku
+## Deploying to Heroku (for testing)
+
+### One click
+
+[![Deploy to Heroku](https://www.herokucdn.com/deploy/button.svg)](https://www.heroku.com/deploy?template=https://github.com/jakesatcher/BLST/tree/claude/great-bardeen-wfd39q)
+
+The button reads [`app.json`](app.json) and:
+- creates the app with a Heroku Postgres database (`essential-0`, about $5/month);
+- generates a random **admin password** (`ADMIN_TOKEN`);
+- runs database migrations in the release phase;
+- loads a **demo tournament** on first deploy (`SEED_DEMO=true`) so there's something to click around in. Delete it any time from Admin → Settings.
+
+The button uses this branch. After the branch is merged, change the URL's `tree/...` part to `tree/main`.
+
+**Signing in after deploy:** open the app → **Admin**. For the password, go to the Heroku dashboard → your app → **Settings → Reveal Config Vars** and copy `ADMIN_TOKEN`. Or run `heroku config:get ADMIN_TOKEN -a <app>`.
+
+### From the command line
 
 ```bash
-heroku create blst
+heroku create blst-test
 heroku addons:create heroku-postgresql:essential-0
 heroku config:set ADMIN_TOKEN="$(openssl rand -hex 24)"
-# optional, see docs/FACTIONS.md
+# optional BLPA Factions link, see docs/FACTIONS.md
 heroku config:set FACTIONS_BASE_URL="https://your-factions-app.herokuapp.com" FACTIONS_ADMIN_TOKEN="..." FACTIONS_AUTO_SYNC=true
-git push heroku main
-heroku run npm run seed        # optional demo data
+git push heroku claude/great-bardeen-wfd39q:main
+heroku run npm run seed          # optional demo tournament
+heroku open
 ```
 
-The `Procfile` runs migrations in the release phase. TLS to Heroku Postgres is turned on automatically. Run **one web dyno**: live updates fan out in memory. Before scaling out, move the event bus in `src/lib/bus.js` to Postgres LISTEN/NOTIFY.
+The `Procfile` runs migrations in the release phase. TLS to Heroku Postgres is turned on automatically, and the app refuses to boot on Heroku without `ADMIN_TOKEN`. Run **one web dyno**: live updates fan out in memory. Before scaling out, move the event bus in `src/lib/bus.js` to Postgres LISTEN/NOTIFY.
+
+## Using it on an iPad
+
+1. Open the app in Safari. Tap **Share → Add to Home Screen**. BLST then opens full-screen like an app, with its own icon.
+2. **Admin:** sign in with the admin password, then follow the **Getting started** checklist. It walks you through naming teams, adding players (or importing a roster CSV), scheduling games and creating scorekeeper keys.
+3. **Scorekeeper:** on the rink iPad, sign in with a *scorekeeper* key and tap a game.
+   - The score and clock bar stays pinned at the top while you scroll.
+   - Tap **▶ Start clock / ■ Stop clock**.
+   - For a goal, tap **Goal**, then tap the scorer → first assist → second assist by jersey number. Time is captured when you tap and can be edited.
+   - **↶ Undo last** voids the most recent entry. Restore it from the event log if needed.
+4. Works in portrait and landscape.
+   - The screen stays awake while a game is open.
+   - A **● Live / Reconnecting…** indicator shows whether the rink Wi-Fi connection is up.
+   - Every confirmation and edit opens a touch-sized sheet, not a browser pop-up.
+5. Phones get the same public pages with a compact scoreboard. Share the game or tournament link with parents and fans.
 
 ## Game-day workflow
 
