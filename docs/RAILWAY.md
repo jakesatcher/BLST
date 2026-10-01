@@ -140,7 +140,15 @@ railway variable set --service blst TWILIO_ACCOUNT_SID=AC... TWILIO_AUTH_TOKEN=.
 ```
 
 Without the CLI, write `npx @railway/cli` instead of `railway`, or use the
-service's **Variables** tab. Once a channel has a provider, its codes are
+service's **Variables** tab. Variable changes made in the dashboard are
+*staged*: click **Deploy** on the banner at the top of the canvas to apply them.
+
+**Checking it:** each start logs `Email: Resend API, from …` (or `SMTP host:465`)
+and every email logs `email sent via … to j•••@…`. If you see neither, the
+variables haven't reached the running deployment. A sign-in for an email with no
+account sends nothing (on purpose); the log says so with
+`[auth] sign-in for …: no account with that email`. On a new install use
+**Set up admin**, not **Sign in**. Once a channel has a provider, its codes are
 sent and never logged. If sending fails, the reason is in the Deploy Logs
 (`email send failed: …` or `sms send failed: …`). When both work, set
 `AUTH_LOG_CODES=false`.

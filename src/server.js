@@ -27,6 +27,7 @@ async function main() {
   // Least privilege: requests run as a role that can't change the schema.
   config.dbMode = await require("./db/create-app-role").ensureRuntimeRole();
   const notify = require("./services/notify");
+  console.log(`Email: ${notify.describeEmail()} · Text messages: ${notify.smsConfigured() ? "Twilio" : "not set up (codes go to this log)"}`);
   if (config.deployed && config.auth.logCodes && (!notify.emailConfigured() || !notify.smsConfigured())) {
     console.warn("Email/SMS aren't fully set up: sign-in codes for those channels are written to this log. Set RESEND_API_KEY (or SMTP_URL) and TWILIO_* (see docs/RAILWAY.md).");
   }

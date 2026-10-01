@@ -17,14 +17,16 @@
   function renderSignedOut() {
     const box = h("div");
     const names = [["login", "Sign in"], ["signup", "Create account"]];
-    const initial = location.hash === "#signup" ? "signup" : "login";
+    if (status.setup_needed) names.push(["setup", "Set up admin"]);
+    // A new install has no accounts yet: "Sign in" can't work, so start at setup.
+    const initial = status.setup_needed ? "setup" : location.hash === "#signup" ? "signup" : "login";
     const intros = {
       login: "We'll email you a code, then text a code to your phone. No password needed.",
       signup: "Create an account, then ask for your organization. All we keep is your email address and mobile number.",
+      setup: "No admin account exists yet. Enter the setup key from the server log (or ADMIN_TOKEN) to create the platform admin.",
     };
     const bar = tabs(names, (id) => signInFlow(box, { mode: id, intro: intros[id], onDone: renderSignedIn }), initial, { size: "medium" });
     mount(app, intro, h("div", { class: "card auth-card" }, h("h2", null, "Get started"), bar.el, box,
-      status.setup_needed ? h("p", { class: "notice small" }, "First start: ", h("a", { href: "/account" }, "set up the platform admin"), ".") : "",
       status.dev_codes ? h("p", { class: "notice small" }, "Development server: codes are printed in the server log.") : ""));
     signInFlow(box, { mode: initial, intro: intros[initial], onDone: renderSignedIn });
   }

@@ -136,7 +136,12 @@ async function createChallenge({ purpose, email, phone = null, accountId = null,
 async function startLogin(rawEmail) {
   const email = normEmail(rawEmail);
   const acct = await db.one("SELECT id, phone FROM accounts WHERE email = $1 AND disabled_at IS NULL", [email]);
-  if (!acct) return createChallenge({ purpose: "login", email, ghost: true });
+  if (!acct) {
+    // Nothing is sent (the response looks the same, so it doesn't reveal who
+    // has an account). Operators can see why in the log.
+    console.log(`[auth] sign-in for ${maskEmail(email)}: no account with that email, so no code was sent. Use "Create account" (or "Set up admin" on a new install).`);
+    return createChallenge({ purpose: "login", email, ghost: true });
+  }
   return createChallenge({ purpose: "login", email, phone: acct.phone, accountId: acct.id });
 }
 

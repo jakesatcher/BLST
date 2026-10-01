@@ -12,6 +12,23 @@ function emailConfigured() {
   return Boolean(config.email.resendApiKey || config.email.smtpUrl);
 }
 
+const maskTo = (to) => String(to).replace(/^(.).*?(@.*)$/, "$1•••$2");
+
+/** For the start-up log: which email provider is in use (no secrets). */
+function describeEmail() {
+  const from = `from ${config.email.from}`;
+  if (config.email.resendApiKey) return `Resend API, ${from}`;
+  if (config.email.smtpUrl) {
+    try {
+      const u = new URL(config.email.smtpUrl);
+      return `SMTP ${u.hostname}:${u.port || (u.protocol === "smtps:" ? 465 : 587)}, ${from}`;
+    } catch {
+      return "SMTP_URL is set but isn't a valid URL (smtps://USER:PASS@host:465)";
+    }
+  }
+  return "not set up (codes go to this log)";
+}
+
 async function sendViaResend(to, subject, text) {
   let res;
   try {
@@ -30,6 +47,7 @@ async function sendViaResend(to, subject, text) {
     console.error(`email send failed: Resend ${res.status} ${detail}`);
     throw new HttpError(502, "Couldn't send the email. Try again in a minute.");
   }
+  console.log(`email sent via Resend to ${maskTo(to)}`);
 }
 function smsConfigured() {
   const s = config.sms;
@@ -57,6 +75,7 @@ async function sendEmail(to, subject, text) {
   if (!transport) transport = require("nodemailer").createTransport(config.email.smtpUrl);
   try {
     await transport.sendMail({ from: config.email.from, to, subject, text });
+    console.log(`email sent via SMTP to ${maskTo(to)}`);
   } catch (err) {
     console.error("email send failed:", err.message);
     throw new HttpError(502, "Couldn't send the email. Try again in a minute.");
@@ -88,4 +107,4 @@ async function sendSms(to, body) {
   }
 }
 
-module.exports = { assertCanSend, sendEmail, sendSms, emailConfigured, smsConfigured, outbox };
+module.exports = { describeEmail, assertCanSend, sendEmail, sendSms, emailConfigured, smsConfigured, outbox };
