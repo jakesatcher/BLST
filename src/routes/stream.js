@@ -43,6 +43,9 @@ router.get("/stream", async (req, res) => {
   const gameId = optInt(req.query.game_id, "game_id", { min: 1 });
   const tournamentId = optInt(req.query.tournament_id, "tournament_id", { min: 1 });
   const initial = gameId ? await data.gameSnapshot(gameId) : null;
+  // Events from every organization pass through the bus: only this
+  // organization's reach this viewer.
+  const myOrg = require("../lib/context").currentOrg();
 
   res.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
@@ -56,6 +59,7 @@ router.get("/stream", async (req, res) => {
   else send("hello", { server_now: Date.now() });
 
   const onGame = (msg) => {
+    if (msg.orgId !== myOrg) return;
     if (gameId) {
       if (msg.gameId === gameId) send("snapshot", msg.snapshot);
       return;
@@ -63,6 +67,7 @@ router.get("/stream", async (req, res) => {
     if (!tournamentId || msg.tournamentId === tournamentId) send("game.summary", summary(msg));
   };
   const onDomain = (msg) => {
+    if (msg.orgId !== myOrg) return;
     if (gameId || !msg.event.match(/^(roster|team|tournament|schedule|game\.created|game\.deleted|player)/)) return;
     if (tournamentId && msg.data.tournament_id !== undefined && msg.data.tournament_id !== tournamentId) return;
     send("tournament.changed", { event: msg.event, tournament_id: msg.data.tournament_id ?? null });

@@ -4,7 +4,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const crypto = require("crypto");
-const { startApp, waitFor } = require("./helpers");
+const { startApp, waitFor, ownerQuery, closeOwner } = require("./helpers");
 
 let ctx;
 let api;
@@ -22,13 +22,14 @@ test.before(async () => {
 test.after(async () => {
   require("../src/services/gameControl").disarmAll();
   ctx.server.close();
+  await closeOwner();
   await db.close();
 });
 
 test("the database derives the same member id and Order as the standalone app", async () => {
   const emails = ["Jane.Doe+hockey@Gmail.COM", "  sam@example.com", "üser@exämple.de"];
   for (let i = 0; i < 300; i++) emails.push(`${crypto.randomBytes(1 + (i % 20)).toString("hex")}@ex${i % 5}.org`);
-  const rows = await db.many("SELECT e, blst_faction_order(e) AS o, blst_faction_member_id(e) AS i FROM unnest($1::text[]) e", [emails]);
+  const rows = await db.many("SELECT e, blst_faction_order(1, e) AS o, blst_faction_member_id(e) AS i FROM unnest($1::text[]) e", [emails]);
   for (const r of rows) {
     assert.equal(r.o, factions.assignOrder(r.e), r.e);
     assert.equal(r.i, factions.memberId(r.e), r.e);
@@ -200,7 +201,7 @@ test("points update automatically when a game in a linked tournament goes final"
 
 test("import from a standalone Factions database keeps its Orders and data", async () => {
   // The standalone app's tables (Prisma schema), in their own schema here.
-  await db.query(`DROP SCHEMA IF EXISTS legacy CASCADE; CREATE SCHEMA legacy;
+  await ownerQuery(`DROP SCHEMA IF EXISTS legacy CASCADE; CREATE SCHEMA legacy;
     CREATE TABLE legacy.orders (slug TEXT PRIMARY KEY, name TEXT NOT NULL, animal TEXT NOT NULL, "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE legacy.players (id TEXT PRIMARY KEY, email TEXT NOT NULL UNIQUE, "displayName" TEXT, "leagueAppsUserId" TEXT UNIQUE,
       "orderSlug" TEXT NOT NULL REFERENCES legacy.orders(slug), "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, "updatedAt" TIMESTAMP(3) NOT NULL);
@@ -212,18 +213,18 @@ test("import from a standalone Factions database keeps its Orders and data", asy
       "awardedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE legacy.event_participation (id TEXT PRIMARY KEY, "playerId" TEXT NOT NULL, "eventId" TEXT NOT NULL, "pointsEarned" INTEGER NOT NULL DEFAULT 0,
       placement INTEGER, "registeredAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, metadata JSONB);`);
-  await db.query(`INSERT INTO legacy.orders (slug, name, animal) SELECT slug, name, animal FROM faction_orders`);
+  await ownerQuery(`INSERT INTO legacy.orders (slug, name, animal) SELECT slug, name, 'x' FROM factions WHERE org_id = 1`);
   const kimId = factions.memberId("kim@example.com");
   const oldId = factions.memberId("veteran@example.com");
   // Kim exists in both; pretend the standalone app had put Kim elsewhere.
   const kimNow = (await db.one("SELECT order_slug FROM faction_members WHERE id = $1", [kimId])).order_slug;
   const kimThen = factions.ORDERS.find((o) => o.slug !== kimNow).slug;
-  await db.query(`INSERT INTO legacy.players (id, email, "displayName", "orderSlug", "updatedAt") VALUES
+  await ownerQuery(`INSERT INTO legacy.players (id, email, "displayName", "orderSlug", "updatedAt") VALUES
     ($1, 'veteran@example.com', 'Vera Veteran', 'ursonne', now()), ($2, 'kim@example.com', 'Kim Lee', $3, now())`, [oldId, kimId, kimThen]);
-  await db.query(`INSERT INTO legacy.order_progress ("playerId", "orderSlug", points, "updatedAt") VALUES ($1, 'ursonne', 40, now())`, [oldId]);
-  await db.query(`INSERT INTO legacy.events (id, name, "startDate", "updatedAt") VALUES ('ckoldevent1', 'Spring Fling 2026', '2026-04-01', now())`);
-  await db.query(`INSERT INTO legacy.event_participation (id, "playerId", "eventId", "pointsEarned", placement) VALUES ('p1', $1, 'ckoldevent1', 15, 1)`, [oldId]);
-  await db.query(`INSERT INTO legacy.achievements (id, "playerId", code, title, "eventId") VALUES ('a1', $1, 'founder', 'Founding member', 'ckoldevent1')`, [oldId]);
+  await ownerQuery(`INSERT INTO legacy.order_progress ("playerId", "orderSlug", points, "updatedAt") VALUES ($1, 'ursonne', 40, now())`, [oldId]);
+  await ownerQuery(`INSERT INTO legacy.events (id, name, "startDate", "updatedAt") VALUES ('ckoldevent1', 'Spring Fling 2026', '2026-04-01', now())`);
+  await ownerQuery(`INSERT INTO legacy.event_participation (id, "playerId", "eventId", "pointsEarned", placement) VALUES ('p1', $1, 'ckoldevent1', 15, 1)`, [oldId]);
+  await ownerQuery(`INSERT INTO legacy.achievements (id, "playerId", code, title, "eventId") VALUES ('a1', $1, 'founder', 'Founding member', 'ckoldevent1')`, [oldId]);
 
   const { importFrom } = require("../src/services/factionsImport");
   const url = `${process.env.DATABASE_URL}?schema=legacy`;
@@ -246,10 +247,10 @@ test("import from a standalone Factions database keeps its Orders and data", asy
 
   // Earlier side-by-side deploys kept the standalone app in this database's
   // "factions" schema: BLST imports that by itself, exactly once.
-  await db.query("ALTER SCHEMA legacy RENAME TO factions");
+  await ownerQuery("ALTER SCHEMA legacy RENAME TO factions");
   const { autoImportSharedSchema } = require("../src/services/factionsImport");
   const first = await autoImportSharedSchema({ log: () => {} });
   assert.equal(first.members, 2);
   assert.equal(await autoImportSharedSchema({ log: () => {} }), null, "only once");
-  await db.query("DROP SCHEMA factions CASCADE");
+  await ownerQuery("DROP SCHEMA factions CASCADE");
 });

@@ -51,7 +51,7 @@ async function importFrom(url, { log = () => {}, ssl } = {}) {
   await db.tx(async (c) => {
     // Lets this transaction set Orders explicitly (see the guard trigger).
     await c.query("SET LOCAL blst.factions_import = 'on'");
-    const known = new Set((await c.query("SELECT slug FROM faction_orders")).rows.map((r) => r.slug));
+    const known = new Set((await c.query("SELECT slug FROM factions")).rows.map((r) => r.slug));
     for (const m of source.members) {
       if (!known.has(m.order_slug)) {
         report.skipped.push({ member: m.id, reason: `unknown Order "${m.order_slug}"` });
@@ -63,7 +63,7 @@ async function importFrom(url, { log = () => {}, ssl } = {}) {
         await c.query(
           `INSERT INTO faction_members (id, email, display_name, leagueapps_user_id, order_slug, bonus_points, degree, source, created_at)
            VALUES ($1, lower(btrim($2)), $3, $4, $5, $6, $7, 'factions-import', $8)
-           ON CONFLICT (email) DO UPDATE SET order_slug = EXCLUDED.order_slug, bonus_points = EXCLUDED.bonus_points, degree = EXCLUDED.degree,
+           ON CONFLICT (org_id, email) DO UPDATE SET order_slug = EXCLUDED.order_slug, bonus_points = EXCLUDED.bonus_points, degree = EXCLUDED.degree,
              display_name = COALESCE(EXCLUDED.display_name, faction_members.display_name),
              leagueapps_user_id = COALESCE(faction_members.leagueapps_user_id, EXCLUDED.leagueapps_user_id),
              created_at = LEAST(faction_members.created_at, EXCLUDED.created_at)`,
@@ -98,7 +98,7 @@ async function importFrom(url, { log = () => {}, ssl } = {}) {
       if (!memberIds.has(p.member_id)) continue;
       await c.query(
         `INSERT INTO faction_participation (member_id, event_id, points_earned, placement, registered_at, metadata) VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (member_id, event_id) DO UPDATE SET points_earned = EXCLUDED.points_earned, placement = EXCLUDED.placement`,
+         ON CONFLICT (org_id, member_id, event_id) DO UPDATE SET points_earned = EXCLUDED.points_earned, placement = EXCLUDED.placement`,
         [p.member_id, p.event_id, p.points_earned, p.placement, p.registered_at, p.metadata ? JSON.stringify(p.metadata) : null],
       );
       report.participation += 1;
@@ -123,14 +123,18 @@ async function importFrom(url, { log = () => {}, ssl } = {}) {
  */
 async function autoImportSharedSchema({ log = console.log } = {}) {
   if (/^(0|false|no|off)$/i.test(process.env.FACTIONS_AUTO_IMPORT || "")) return null;
-  const found = await db.one("SELECT to_regclass('factions.players') IS NOT NULL AND to_regclass('factions.order_progress') IS NOT NULL AS ok");
+  const found = await db.one(
+    `SELECT count(*) = 2 AS ok FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE n.nspname = 'factions' AND c.relname IN ('players', 'order_progress')`,
+  );
   if (!found.ok) return null;
   if (await db.one("SELECT 1 FROM integration_settings WHERE key = 'factions_schema_imported'")) return null;
   const config = require("../config");
   const u = new URL(config.databaseUrl);
   u.searchParams.set("schema", "factions");
   log("Found a standalone BLPA Factions database in the \"factions\" schema: importing it once…");
-  const report = await importFrom(u.toString(), { log, ssl: config.databaseSsl });
+  // The standalone app was BLPA's: its data belongs to organization 1.
+  const report = await require("../lib/context").withOrg(1, () => importFrom(u.toString(), { log, ssl: config.databaseSsl }));
   await db.query(
     "INSERT INTO integration_settings (key, value) VALUES ('factions_schema_imported', $1) ON CONFLICT (key) DO UPDATE SET value = $1",
     [JSON.stringify({ at: new Date().toISOString(), members: report.members, events: report.events, order_changed: report.order_changed.length })],

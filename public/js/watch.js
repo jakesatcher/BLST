@@ -137,7 +137,7 @@
         /* fall through to a normal window */
       }
     }
-    const url = `/overlay.html?game=${id}&pos=fill&bg=dark&delay=${d}&size=${prefs.size}${prefs.shots ? "" : "&shots=0"}`;
+    const url = `/overlay?game=${id}&pos=fill&bg=dark&delay=${d}&size=${prefs.size}${prefs.shots ? "" : "&shots=0"}`;
     const w = window.open(url, `blst-scorebug-${id}`, "popup,width=560,height=140");
     if (!w) location.href = url;
   }
@@ -160,14 +160,14 @@
     setPref("overlay", !prefs.overlay);
     overlayToggle.textContent = prefs.overlay ? "Hide overlay" : "Show overlay";
   } }, prefs.overlay ? "Hide overlay" : "Show overlay");
-  const obsUrl = `${location.origin}/overlay.html?game=${id}`;
+  const obsUrl = `${location.origin}/overlay?game=${id}`;
 
   mount(app,
     h("div", { class: "row between", style: { marginBottom: "10px" } },
       h("div", null,
         h("h1", { style: { margin: 0 } }, `${snap.away.name} @ ${snap.home.name}`),
         h("div", { class: "muted small" }, [snap.tournament.name, snap.game.venue, snap.game.scheduled_at ? fmtDate(snap.game.scheduled_at) : null].filter(Boolean).join(" · "))),
-      h("a", { href: `/game.html?id=${id}` }, "Box score & play-by-play →")),
+      h("a", { href: `/game?id=${id}` }, "Box score & play-by-play →")),
     stage,
     h("div", { class: "card watch-controls" },
       h("div", { class: "row" },
@@ -198,7 +198,7 @@
         h("ol", { class: "small" },
           h("li", null, "Open the LiveBarn app (or livebarn.com) on this rink's camera."),
           h("li", null, "Swipe up from the bottom to show the Dock, then drag Safari onto the side of the screen (Split View or Slide Over)."),
-          h("li", null, "In that Safari window open the compact scorebug: ", h("a", { href: `/overlay.html?game=${id}&pos=fill&bg=dark&delay=${delay}`, target: "_blank" }, "open scorebug"), "."),
+          h("li", null, "In that Safari window open the compact scorebug: ", h("a", { href: `/overlay?game=${id}&pos=fill&bg=dark&delay=${delay}`, target: "_blank" }, "open scorebug"), "."),
           h("li", null, "Adjust the delay above (or add &delay=20 to the scorebug link) so the score changes when the puck goes in on the video."))),
       h("details", { style: { marginTop: "8px" } },
         h("summary", null, "Broadcast overlay for OBS / streaming software"),

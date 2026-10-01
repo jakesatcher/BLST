@@ -357,7 +357,7 @@ img.logo.xl { width: 96px; height: 96px; }
   .topbar { grid-template-columns: 1fr auto; grid-template-areas: "brand who" "nav nav"; row-gap: 10px; }
   .topbar .brand { grid-area: brand; }
   .topbar .who { grid-area: who; }
-  .mainnav { grid-area: nav; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+  .mainnav { grid-area: nav; display: grid; grid-template-columns: repeat(var(--n, 5), minmax(0, 1fr)); gap: 6px; }
   .mainnav a { flex-direction: column; justify-content: center; gap: 4px; min-height: 64px; padding: 8px 4px; border-radius: 12px; font-size: 0.9rem; white-space: normal; text-align: center; line-height: 1.15; }
 }
 .mainnav .short { display: none; }
@@ -454,3 +454,21 @@ button.link { background: none; border: 0; padding: 6px 0; color: var(--accent);
 .order-strip a { display: block; text-align: center; padding: 8px 4px; border-radius: 10px; color: #fff; background: var(--order); text-decoration: none; }
 .order-strip a strong { display: block; font-size: 1.2rem; font-variant-numeric: tabular-nums; }
 .order-strip a small { opacity: 0.9; }
+
+/* Platform (bare domain) and organization admin */
+.platform-hero h1 { font-size: 1.8rem; margin: 0 0 6px; }
+.org-form { display: grid; gap: 12px; max-width: 560px; }
+.org-form textarea { font-family: inherit; font-size: 1rem; min-height: 0; }
+.slug-row { display: flex; align-items: center; gap: 6px; color: var(--text); }
+.slug-row input { flex: 1; min-width: 0; text-align: right; }
+.slug-row > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 55%; }
+.good-text { color: var(--good); }
+.org-list { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 8px; }
+.org-list li { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-2); }
+.faction-row { display: grid; grid-template-columns: 52px 1fr 64px auto; gap: 8px; align-items: center; }
+.faction-row input[type="color"] { width: 56px; height: 40px; padding: 2px; }
+.faction-row .emoji { font-size: 1.4rem; text-align: center; }
+@media (max-width: 560px) { .faction-row { grid-template-columns: 44px 1fr 52px; } .faction-row .row { grid-column: 1 / -1; } }
+.card-list { list-style: none; margin: 0 0 16px; padding: 0; display: grid; gap: 12px; }
+.card-list > li.card { margin: 0; }

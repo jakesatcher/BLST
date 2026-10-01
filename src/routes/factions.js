@@ -1,4 +1,5 @@
 const { Router } = require("express");
+const { invalidateOrgCache } = require("../middleware/org");
 const factions = require("../services/factions");
 const { requireRole } = require("../middleware/auth");
 const { badRequest, intParam, optInt, optString, optBool, optEnum } = require("../lib/http");
@@ -9,7 +10,18 @@ const { badRequest, intParam, optInt, optString, optBool, optEnum } = require(".
 
 const router = Router();
 const admin = requireRole("admin");
-const SLUGS = factions.ORDERS.map((o) => o.slug);
+// Factions is optional per organization: while it's off, its pages and API
+// don't exist (404) for that organization. The designer below works either
+// way, so admins can set factions up before turning the feature on.
+const enabled = async (_req, _res, next) => {
+  await factions.requireEnabled();
+  next();
+};
+const slugParam = (v, name = "faction") => {
+  if (v === undefined || v === null || v === "") return undefined;
+  if (typeof v !== "string" || !/^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$/.test(v)) throw badRequest(`invalid ${name}`);
+  return v;
+};
 const idParam = (v, what = "id") => {
   if (typeof v !== "string" || !/^[A-Za-z0-9_-]{1,400}$/.test(v)) throw badRequest(`invalid ${what}`);
   return v;
@@ -28,46 +40,46 @@ const publicEvent = (e) => ({
 // Public
 
 /** Everything the Factions page needs in one call. */
-router.get("/factions", async (_req, res) => {
+router.get("/factions", enabled, async (_req, res) => {
   const [orders, events, leaders] = await Promise.all([factions.orderTotals(), factions.listEvents(), factions.leaders({ limit: 10 })]);
   res.json({ orders, events: events.map(publicEvent), leaders });
 });
 
-router.get("/factions/orders", async (_req, res) => {
+router.get("/factions/orders", enabled, async (_req, res) => {
   res.json(await factions.orderTotals());
 });
 
-router.get("/factions/leaders", async (req, res) => {
-  const order = optEnum(req.query.order, "order", SLUGS);
+router.get("/factions/leaders", enabled, async (req, res) => {
+  const order = slugParam(req.query.order, "order");
   res.json(await factions.leaders({ order, limit: optInt(req.query.limit, "limit", { min: 1, max: 100 }) || 25 }));
 });
 
-router.get("/factions/events", async (_req, res) => {
+router.get("/factions/events", enabled, async (_req, res) => {
   res.json((await factions.listEvents()).map(publicEvent));
 });
 
-router.get("/factions/events/:id/totals", async (req, res) => {
+router.get("/factions/events/:id/totals", enabled, async (req, res) => {
   res.json(await factions.eventTotals(idParam(req.params.id)));
 });
 
 // ---------------------------------------------------------------------------
 // Admin: members
 
-router.get("/factions/status", admin, async (_req, res) => {
+router.get("/factions/status", admin, enabled, async (_req, res) => {
   res.json(await factions.status());
 });
 
-router.get("/factions/members", admin, async (req, res) => {
+router.get("/factions/members", admin, enabled, async (req, res) => {
   res.json(await factions.listMembers({
     q: optString(req.query.q, "q", { max: 100 }),
-    order: optEnum(req.query.order, "order", SLUGS),
+    order: slugParam(req.query.order, "order"),
     limit: optInt(req.query.limit, "limit", { min: 1, max: 500 }) || 50,
     offset: optInt(req.query.offset, "offset", { min: 0 }) || 0,
   }));
 });
 
 /** Find or create by email (POST so emails stay out of URLs and logs). */
-router.post("/factions/members", admin, async (req, res) => {
+router.post("/factions/members", admin, enabled, async (req, res) => {
   const { member, created } = await factions.getOrCreateMember({
     email: optString(req.body.email, "email", { max: 254 }),
     display_name: optString(req.body.display_name, "display_name", { max: 120 }),
@@ -76,30 +88,30 @@ router.post("/factions/members", admin, async (req, res) => {
   res.status(created ? 201 : 200).json({ ...(await factions.getMember(member.id)), created });
 });
 
-router.post("/factions/members/find", admin, async (req, res) => {
+router.post("/factions/members/find", admin, enabled, async (req, res) => {
   const email = optString(req.body.email, "email", { max: 254 });
   if (!email) throw badRequest("email is required");
   res.json(await factions.findMemberByEmail(email));
 });
 
-router.post("/factions/members/import", admin, async (req, res) => {
+router.post("/factions/members/import", admin, enabled, async (req, res) => {
   const csv = typeof req.body === "string" ? req.body : req.body.csv;
   if (typeof csv !== "string") throw badRequest("send the CSV as text/csv, or as {csv: \"...\"}");
   const dryRun = (typeof req.body === "string" ? req.query.dry_run === "true" : optBool(req.body.dry_run, "dry_run")) || false;
   res.status(dryRun ? 200 : 201).json(await factions.importMembers(csv, { dryRun }));
 });
 
-router.get("/factions/members/:id", admin, async (req, res) => {
+router.get("/factions/members/:id", admin, enabled, async (req, res) => {
   res.json(await factions.getMember(idParam(req.params.id)));
 });
 
-router.post("/factions/members/:id/points", admin, async (req, res) => {
+router.post("/factions/members/:id/points", admin, enabled, async (req, res) => {
   const points = optInt(req.body.points, "points", { min: -100000, max: 100000 });
   if (!points) throw badRequest("points must be a whole number other than 0 (negative takes points away)");
   res.json(await factions.addBonusPoints(idParam(req.params.id), points));
 });
 
-router.post("/factions/members/:id/achievements", admin, async (req, res) => {
+router.post("/factions/members/:id/achievements", admin, enabled, async (req, res) => {
   const code = optString(req.body.code, "code", { max: 120 });
   const title = optString(req.body.title, "title", { max: 200 });
   if (!code || !title) throw badRequest("code and title are required");
@@ -111,7 +123,7 @@ router.post("/factions/members/:id/achievements", admin, async (req, res) => {
 // ---------------------------------------------------------------------------
 // Admin: events
 
-router.post("/factions/events", admin, async (req, res) => {
+router.post("/factions/events", admin, enabled, async (req, res) => {
   const name = optString(req.body.name, "name", { max: 120 });
   if (!name) throw badRequest("name is required");
   res.status(201).json(await factions.createEvent({
@@ -122,11 +134,11 @@ router.post("/factions/events", admin, async (req, res) => {
   }));
 });
 
-router.get("/factions/events/:id", admin, async (req, res) => {
+router.get("/factions/events/:id", admin, enabled, async (req, res) => {
   res.json(await factions.getEvent(idParam(req.params.id)));
 });
 
-router.post("/factions/events/:id/participation", admin, async (req, res) => {
+router.post("/factions/events/:id/participation", admin, enabled, async (req, res) => {
   const memberId = req.body.member_id === undefined ? undefined : idParam(req.body.member_id, "member_id");
   const email = optString(req.body.email, "email", { max: 254 });
   if (!memberId && !email) throw badRequest("member_id or email is required");
@@ -141,28 +153,61 @@ router.post("/factions/events/:id/participation", admin, async (req, res) => {
 // ---------------------------------------------------------------------------
 // Tournaments
 
-router.post("/tournaments/:id/factions/link", admin, async (req, res) => {
+router.post("/tournaments/:id/factions/link", admin, enabled, async (req, res) => {
   const eventId = req.body.event_id === undefined || req.body.event_id === null || req.body.event_id === "" ? undefined : idParam(req.body.event_id, "event_id");
   res.json(await factions.linkTournament(intParam(req.params.id), { event_id: eventId }));
 });
 
-router.delete("/tournaments/:id/factions/link", admin, async (req, res) => {
+router.delete("/tournaments/:id/factions/link", admin, enabled, async (req, res) => {
   res.json(await factions.unlinkTournament(intParam(req.params.id)));
 });
 
-router.get("/tournaments/:id/factions/preview", admin, async (req, res) => {
+router.get("/tournaments/:id/factions/preview", admin, enabled, async (req, res) => {
   res.json(await factions.participationPreview(intParam(req.params.id)));
 });
 
-router.post("/tournaments/:id/factions/award", admin, async (req, res) => {
+router.post("/tournaments/:id/factions/award", admin, enabled, async (req, res) => {
   res.json(await factions.awardResults(intParam(req.params.id)));
 });
 
 /** Public: per-Order totals for the tournament's event (no personal data). */
-router.get("/tournaments/:id/factions/order-totals", async (req, res) => {
+router.get("/tournaments/:id/factions/order-totals", enabled, async (req, res) => {
   const t = await require("../services/data").getTournament(intParam(req.params.id));
   if (!t.factions_event_id) throw new factions.HttpError(409, "this tournament doesn't count for Factions");
   res.json(await factions.eventTotals(t.factions_event_id));
+});
+
+// ---------------------------------------------------------------------------
+// Designing the organization's factions (admin; works while Factions is off)
+
+router.get("/factions-setup", admin, async (_req, res) => {
+  res.json({ ...(await factions.settings()), factions: await factions.listFactions(), presets: factions.PRESETS });
+});
+
+router.put("/factions-setup", admin, async (req, res) => {
+  const on = optBool(req.body.enabled, "enabled");
+  if (on === undefined) throw badRequest("enabled (true or false) is required");
+  const r = await factions.setEnabled(on);
+  invalidateOrgCache(); // pages and the menu pick it up straight away
+  res.json(r);
+});
+
+router.post("/factions-setup/factions", admin, async (req, res) => {
+  if (req.body.preset !== undefined) return res.status(201).json(await factions.applyPreset(optString(req.body.preset, "preset", { max: 20 })));
+  res.status(201).json(await factions.createFaction(req.body));
+});
+
+router.patch("/factions-setup/factions/:slug", admin, async (req, res) => {
+  res.json(await factions.updateFaction(slugParam(req.params.slug), req.body));
+});
+
+router.delete("/factions-setup/factions/:slug", admin, async (req, res) => {
+  res.json(await factions.deleteFaction(slugParam(req.params.slug)));
+});
+
+/** Public: the organization's factions (names, emoji, colours) for the UI. */
+router.get("/factions/definitions", enabled, async (_req, res) => {
+  res.json(await factions.listFactions());
 });
 
 module.exports = router;

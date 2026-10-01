@@ -200,10 +200,12 @@ require("../lib/bus").bus.on("game", () => statsCache.clear());
 require("../lib/bus").bus.on("domain", () => statsCache.clear());
 
 async function tournamentStats(tournamentId) {
-  const key = Number(tournamentId);
+  // Keyed by organization too: a cached result must never skip the
+  // database's per-organization check.
+  const key = `${require("../lib/context").currentOrg()}:${Number(tournamentId)}`;
   const hit = statsCache.get(key);
   if (hit && hit.expires > Date.now()) return hit.value;
-  const value = computeTournamentStats(key);
+  const value = computeTournamentStats(Number(tournamentId));
   statsCache.set(key, { value, expires: Date.now() + STATS_TTL_MS });
   value.catch(() => statsCache.delete(key));
   return value;

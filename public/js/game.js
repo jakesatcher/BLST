@@ -10,7 +10,7 @@
   const board = h("div", { class: "board" });
   const detail = h("div");
   const tabBar = tabs([["summary", "Summary"], ["box", "Box score"], ["lineups", "Lineups"], ["feed", "Play by play"]], () => renderDetail(), "summary");
-  mount(app, h("div", { class: "row between small muted", style: { marginBottom: "8px" } }, h("a", { id: "tlink", href: "/" }, "← Tournament"), h("span", { class: "row" }, h("a", { id: "watchlink", class: "btn primary sm", href: `/watch.html?game=${id}` }, "▶ Watch with live overlay"), h("a", { href: `/api/v1/export/games/${id}` }, "Game JSON"))), board, tabBar.el, detail);
+  mount(app, h("div", { class: "row between small muted", style: { marginBottom: "8px" } }, h("a", { id: "tlink", href: "/" }, "← Tournament"), h("span", { class: "row" }, h("a", { id: "watchlink", class: "btn primary sm", href: `/watch?game=${id}` }, "▶ Watch with live overlay"), h("a", { href: `/api/v1/export/games/${id}` }, "Game JSON"))), board, tabBar.el, detail);
 
   const sideOf = (teamId) => (teamId === snap.home.id ? snap.home : snap.away);
   const absNow = () => snap.game.period_start_abs + (snap.game.period_length_sec - remaining() / 1000);
@@ -110,13 +110,13 @@
     if (tab === "feed") return mount(detail, h("div", { class: "card" }, feed([...snap.events].reverse())));
     if (tab === "lineups") {
       const list = (side, rows) => h("div", { class: "card" }, h("h2", null, BLST.teamMark(side), side.name),
-        table([{ key: "number", label: "#", num: true }, { key: "name", label: "Player", fmt: (r) => h("a", { href: `/player.html?id=${r.player_id}` }, r.name) }, { key: "position", label: "Pos" },
+        table([{ key: "number", label: "#", num: true }, { key: "name", label: "Player", fmt: (r) => h("a", { href: `/player?id=${r.player_id}` }, r.name) }, { key: "position", label: "Pos" },
           { key: "dressed", label: "", fmt: (r) => (r.dressed ? "" : "scratched") }], rows, { sortKey: "number", sortDir: 1 }));
       return mount(detail, h("div", { class: "grid two" }, list(snap.away, snap.lineups.away), list(snap.home, snap.lineups.home)));
     }
     if (tab === "box") {
       const skaterCols = [
-        { key: "name", label: "Player", fmt: (r) => h("a", { href: `/player.html?id=${r.player_id}` }, r.player.name) },
+        { key: "name", label: "Player", fmt: (r) => h("a", { href: `/player?id=${r.player_id}` }, r.player.name) },
         { key: "goals", label: "G", num: true }, { key: "assists", label: "A", num: true }, { key: "points", label: "P", num: true },
         { key: "plus_minus", label: "+/-", num: true }, { key: "pim", label: "PIM", num: true }, { key: "shots", label: "SOG", num: true },
         { key: "hits", label: "HIT", num: true }, { key: "blocks", label: "BLK", num: true }, { key: "fow", label: "FOW", num: true }, { key: "fol", label: "FOL", num: true },
@@ -140,7 +140,7 @@
     snap = s;
     remaining = BLST.clockFrom(s.game);
     document.title = `${s.away.short_name || s.away.name} ${s.away.score} – ${s.home.score} ${s.home.short_name || s.home.name} · BLST`;
-    $("#tlink").href = `/tournament.html?id=${s.game.tournament_id}`;
+    $("#tlink").href = `/tournament?id=${s.game.tournament_id}`;
     $("#tlink").textContent = `← ${s.tournament.name}`;
     $("#watchlink").textContent = s.stream ? (s.stream.embed_url ? "▶ Watch live" : "▶ Watch on LiveBarn + live overlay") : "Live scorebug overlay";
     renderBoard();

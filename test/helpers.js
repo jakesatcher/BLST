@@ -13,9 +13,22 @@ const ADMIN = process.env.ADMIN_TOKEN;
 
 async function resetDb() {
   const db = require("../src/db");
-  await db.query("DROP SCHEMA public CASCADE; CREATE SCHEMA public;");
+  require("../src/lib/context").setFallbackOrg("*");
+  await db.query("DROP SCHEMA IF EXISTS factions CASCADE; DROP SCHEMA IF EXISTS legacy CASCADE; DROP SCHEMA public CASCADE; CREATE SCHEMA public; GRANT USAGE ON SCHEMA public TO PUBLIC;");
   await db.migrate({ log: () => {} });
   return db;
+}
+
+/** Owner connection for test setup that needs schema rights (DDL). */
+let ownerPool;
+function ownerQuery(sql, params) {
+  const { Pool } = require("pg");
+  if (!ownerPool) ownerPool = new Pool({ connectionString: process.env.DATABASE_URL, max: 1 });
+  return ownerPool.query(sql, params);
+}
+async function closeOwner() {
+  if (ownerPool) await ownerPool.end();
+  ownerPool = undefined;
 }
 
 function listen(app) {
@@ -25,8 +38,19 @@ function listen(app) {
   });
 }
 
-async function startApp() {
-  await resetDb();
+/**
+ * Fresh database and app. By default every query then runs as the
+ * least-privilege role, so row-level security (organization isolation) is
+ * really enforced in tests; direct test queries act as organization 1.
+ */
+async function startApp({ asAppRole = true } = {}) {
+  const db = await resetDb();
+  if (asAppRole) {
+    process.env.DATABASE_APP_ROLE = process.env.DATABASE_APP_ROLE || "blst_app_ci";
+    await require("../src/db/create-app-role").ensureRuntimeRole({ log: () => {} });
+  }
+  require("../src/lib/context").setFallbackOrg(1);
+  void db;
   const { createApp } = require("../src/app");
   require("../src/services/webhooks").start();
   const { server, base } = await listen(createApp());
@@ -69,4 +93,4 @@ async function waitFor(fn, timeoutMs = 3000) {
   }
 }
 
-module.exports = { ADMIN, startApp, startWebhookReceiver, waitFor };
+module.exports = { ADMIN, startApp, startWebhookReceiver, waitFor, ownerQuery, closeOwner };

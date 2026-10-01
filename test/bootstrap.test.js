@@ -15,7 +15,7 @@ let bootstrap;
 let outbox;
 
 test.before(async () => {
-  ctx = await helpers.startApp();
+  ctx = await helpers.startApp({ asAppRole: false });
   db = require("../src/db");
   config = require("../src/config");
   bootstrap = require("../src/services/bootstrap");
@@ -75,7 +75,7 @@ test("without ADMIN_TOKEN, a one-time setup key is printed and only it can creat
   const s2 = await call("POST", "/auth/verify", { challenge_id: start.body.challenge_id, code: codeFor("first@example.com") });
   const done = await call("POST", "/auth/verify", { challenge_id: start.body.challenge_id, code: codeFor("+15552020001") });
   assert.equal(s2.body.step, "sms");
-  assert.equal(done.body.account.role, "admin");
+  assert.equal(done.body.account.platform_admin, true);
 
   // Once an admin exists no key is printed and the stored hashes are gone.
   assert.equal(await bootstrap.ensureSetupKey({ log: () => {} }), null);

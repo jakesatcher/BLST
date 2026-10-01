@@ -2,14 +2,15 @@
   const { h, mount, get, $, param, topbar, tabs, table, gameCards, stream, debounce, fmtPct, fmtDay, fmtSec, teamDot } = BLST;
   $("#top").replaceWith(topbar("index"));
   const app = $("#app");
+  await BLST.ready;
   const id = Number(param("id"));
   if (!id) return mount(app, h("p", { class: "notice error" }, "Missing tournament id"));
 
   let t = await get(`/tournaments/${id}`);
-  document.title = `${t.name} · BLST`;
+  document.title = `${t.name} · ${BLST.org ? BLST.org.name : "BLST"}`;
   const view = h("div");
   const names = [["scores", "Scores"], ["standings", "Standings"], ["leaders", "Leaders"], ["skaters", "Skaters"], ["goalies", "Goalies"], ["teams", "Teams"]];
-  if (t.factions_event_id) names.push(["orders", "Factions"]);
+  if (t.factions_event_id && BLST.org && BLST.org.factions_enabled) names.push(["orders", "Factions"]);
   const tabBar = tabs(names, (tab) => { history.replaceState(null, "", `?id=${id}#${tab}`); show(tab); }, location.hash.slice(1) || "scores");
 
   mount(
@@ -64,7 +65,7 @@
       const l = await get(`/tournaments/${id}/leaders?limit=5`);
       const card = (title, list, fmt = (v) => v) =>
         h("div", { class: "card leader-card" }, h("h3", null, title),
-          list.length ? h("ol", null, list.map((p) => h("li", null, h("a", { href: `/player.html?id=${p.player_id}` }, p.name), h("span", { class: "muted small" }, ` ${p.team || ""}`), h("span", { class: "v" }, fmt(p.value)))))
+          list.length ? h("ol", null, list.map((p) => h("li", null, h("a", { href: `/player?id=${p.player_id}` }, p.name), h("span", { class: "muted small" }, ` ${p.team || ""}`), h("span", { class: "v" }, fmt(p.value)))))
             : h("div", { class: "empty" }, "—"));
       return mount(view, h("div", { class: "grid three" },
         card("Points", l.points), card("Goals", l.goals), card("Assists", l.assists), card("Plus/minus", l.plus_minus, (v) => (v > 0 ? `+${v}` : v)),
@@ -75,7 +76,7 @@
       const rows = await get(`/tournaments/${id}/stats/skaters`);
       return mount(view, h("div", { class: "card" }, table(
         [
-          { key: "name", label: "Player", fmt: (r) => h("a", { href: `/player.html?id=${r.player_id}` }, r.name) },
+          { key: "name", label: "Player", fmt: (r) => h("a", { href: `/player?id=${r.player_id}` }, r.name) },
           { key: "jersey_number", label: "#", num: true }, { key: "team", label: "Team", fmt: (r) => r.teams.join(" / ") }, { key: "position", label: "Pos" },
           { key: "gp", label: "GP", num: true }, { key: "goals", label: "G", num: true }, { key: "assists", label: "A", num: true },
           { key: "points", label: "PTS", num: true }, { key: "plus_minus", label: "+/-", num: true }, { key: "pim", label: "PIM", num: true },
@@ -92,7 +93,7 @@
       const rows = await get(`/tournaments/${id}/stats/goalies`);
       return mount(view, h("div", { class: "card" }, table(
         [
-          { key: "name", label: "Goalie", fmt: (r) => h("a", { href: `/player.html?id=${r.player_id}` }, r.name) },
+          { key: "name", label: "Goalie", fmt: (r) => h("a", { href: `/player?id=${r.player_id}` }, r.name) },
           { key: "team", label: "Team", fmt: (r) => r.teams.join(" / ") },
           { key: "gp", label: "GP", num: true }, { key: "wins", label: "W", num: true }, { key: "losses", label: "L", num: true },
           { key: "ot_losses", label: "OTL", num: true }, { key: "shots_against", label: "SA", num: true }, { key: "goals_against", label: "GA", num: true },
@@ -112,9 +113,9 @@
           table(
             [
               { key: "jersey_number", label: "#", num: true },
-              { key: "last_name", label: "Player", fmt: (r) => h("a", { href: `/player.html?id=${r.id}` }, `${r.first_name} ${r.last_name}`, r.role ? ` (${r.role})` : "") },
+              { key: "last_name", label: "Player", fmt: (r) => h("a", { href: `/player?id=${r.id}` }, `${r.first_name} ${r.last_name}`, r.role ? ` (${r.role})` : "") },
               { key: "position", label: "Pos" },
-              ...(team.roster.some((r) => r.factions_order) ? [{ key: "factions_order", label: "Order", fmt: (r) => BLST.orderBadge(r.factions_order) }] : []),
+              ...(team.roster.some((r) => r.factions_order) ? [{ key: "factions_order", label: "Faction", fmt: (r) => BLST.orderBadge(r.factions_order) }] : []),
               ...(team.roster.some((r) => r.draft_round != null || r.draft_pick != null)
                 ? [{ key: "draft_pick", label: "Drafted", num: true, fmt: (r) => draftLabel(r) }] : []),
             ],
@@ -127,10 +128,10 @@
         const totals = await get(`/tournaments/${id}/factions/order-totals`);
         const max = Math.max(1, ...totals.map((r) => r.total_points));
         return mount(view, h("div", { class: "card" },
-          h("div", { class: "row between" }, h("h2", { style: { margin: 0 } }, "Faction standings for this tournament"), h("a", { href: "/factions.html" }, "All-time standings →")),
-          h("p", { class: "muted small" }, "Points from this tournament's games, titles and awards, by Order. Updated as games go final."),
+          h("div", { class: "row between" }, h("h2", { style: { margin: 0 } }, "Faction standings for this tournament"), h("a", { href: "/factions" }, "All-time standings →")),
+          h("p", { class: "muted small" }, "Points from this tournament's games, titles and awards, by faction. Updated as games go final."),
           h("div", { class: "order-grid" }, [...totals].sort((a, b) => a.rank - b.rank).map((r) => {
-            const o = BLST.ORDER[r.slug];
+            const o = BLST.ORDER[r.slug] || r;
             return h("div", { class: `order-card${r.rank === 1 && r.total_points > 0 ? " leader" : ""}`, style: { "--order": o.color } },
               h("span", { class: "rank" }, `#${r.rank}`), h("div", { class: "emoji", "aria-hidden": "true" }, o.emoji), h("h3", null, o.name),
               h("div", { class: "muted small" }, `${r.members} player${r.members === 1 ? "" : "s"}`),

@@ -47,7 +47,7 @@ test.after(async () => {
 });
 
 test("API5 / A01: every write route rejects anonymous callers", async () => {
-  const modules = ["auth", "media", "streams", "tournaments", "players", "games", "importExport", "registrations", "factions", "admin"];
+  const modules = ["platform", "auth", "media", "streams", "tournaments", "players", "games", "importExport", "registrations", "factions", "admin"];
   const checked = [];
   for (const m of modules) {
     const router = require(`../src/routes/${m}`);
@@ -65,7 +65,7 @@ test("API5 / A01: every write route rejects anonymous callers", async () => {
   }
   assert.ok(checked.length > 40, `swept ${checked.length} write routes`);
 
-  for (const path of ["/account", "/admin/accounts", "/factions/members", "/factions/status", "/factions/events/x", "/admin/api-keys", "/admin/webhooks", "/admin/audit-log", "/admin/security", "/import/batches",
+  for (const path of ["/account", "/admin/members", "/platform/orgs", "/platform/accounts", "/platform/orgs/mine", "/factions-setup", "/factions/members", "/factions/status", "/factions/events/x", "/admin/api-keys", "/admin/webhooks", "/admin/audit-log", "/admin/security", "/import/batches",
     `/tournaments/${S["Scope A"].tid}/roster.csv`, `/tournaments/${S["Scope A"].tid}/factions/preview`, `/games/${S["Scope A"].gid}/events/raw`]) {
     assert.equal((await call("GET", path, { ip: "198.51.100.201" })).status, 401, `GET ${path} must be private`);
   }
@@ -298,9 +298,11 @@ test("Audit F2 / API5: an admin API key can't hand out access or send data off-s
     ["POST", "/admin/api-keys", { name: "more", role: "admin" }],
     ["POST", "/admin/webhooks", { name: "x", url: "https://example.com/hook" }],
     ["PATCH", "/admin/webhooks/1", { url: "https://example.com/other" }],
-    ["PATCH", "/admin/accounts/1", { role: "admin" }],
-    ["DELETE", "/admin/accounts/1"],
-    ["POST", "/admin/accounts/1/logout"],
+    ["POST", "/admin/members", { email: "x@example.com", role: "admin" }],
+    ["PATCH", "/admin/members/1", { role: "admin" }],
+    ["DELETE", "/admin/members/1"],
+    ["PATCH", "/platform/accounts/1", { platform_admin: true }],
+    ["PATCH", "/platform/orgs/1", { status: "suspended" }],
   ]) {
     const r = await call(method, path, { token: key, ip, body: body || {} });
     assert.equal(r.status, 403, `${method} ${path}`);

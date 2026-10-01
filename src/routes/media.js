@@ -56,7 +56,7 @@ for (const [path, o] of Object.entries(OWNERS)) {
     await db.tx(async (c) => {
       await c.query(
         `INSERT INTO ${o.logos} (${o.key}, content_type, data) VALUES ($1, $2, $3)
-         ON CONFLICT (${o.key}) DO UPDATE SET content_type = EXCLUDED.content_type, data = EXCLUDED.data, updated_at = now()`,
+         ON CONFLICT (org_id, ${o.key}) DO UPDATE SET content_type = EXCLUDED.content_type, data = EXCLUDED.data, updated_at = now()`,
         [id, type, buf],
       );
       await c.query(`UPDATE ${o.table} SET logo_version = $2 WHERE id = $1`, [id, version]);

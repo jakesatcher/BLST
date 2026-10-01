@@ -238,6 +238,7 @@
     admin: ["M4 6h10", "M18 6h2", "M4 12h4", "M12 12h8", "M4 18h12", "M20 18h0", "M16 4v4", "M10 10v4", "M18 16v4"],
     docs: ["M8 7l-5 5 5 5", "M16 7l5 5-5 5", "M13.5 5l-3 14"],
     factions: ["M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6z", "M12 8v8", "M8.5 11.5h7"],
+    account: ["M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z", "M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5"],
   };
   function icon(name) {
     const NS = "http://www.w3.org/2000/svg";
@@ -254,22 +255,24 @@
   }
 
   function topbar(active) {
-    const links = [
-      ["index", "/", "Scores", "Scores"],
-      ["factions", "/factions.html", "Factions", "Factions"],
-      ["scorekeeper", "/scorekeeper.html", "Scorekeeper", "Scoring"],
-      ["admin", "/admin.html", "Admin & setup", "Setup"],
-      ["docs", "/api.html", "API", "API"],
-    ];
+    const navLinks = () => (ORG
+      ? [
+        ["index", "/stats", "Stats", "Stats"],
+        ...(ORG.factions_enabled ? [["factions", "/factions", "Factions", "Factions"]] : []),
+        ["scorekeeper", "/scorekeeper", "Scorekeeper", "Scoring"],
+        ["admin", "/admin", "Admin & setup", "Setup"],
+        ["docs", "/api", "API", "API"],
+      ]
+      : [["index", "/", "Home", "Home"], ["account", "/account", "Account", "Account"]]);
     const who = h("span", { class: "who" });
-    const signInLink = () => mount(who, h("a", { href: `/account.html?next=${encodeURIComponent(location.pathname + location.search)}` }, "Sign in"));
+    const signInLink = () => mount(who, h("a", { href: `/account?next=${encodeURIComponent(location.pathname + location.search)}` }, "Sign in"));
     if (getToken()) {
       get("/me")
         .then((me) => {
           if (me.via === "dev-open") return;
           if (!me.role) return signInLink();
           const label = me.via === "session" ? me.email : me.role;
-          mount(who, h("a", { href: "/account.html", class: active === "account" ? "active" : null, title: me.key_name ? `Signed in with key "${me.key_name}"` : `Signed in (${me.role})` }, label), " · ",
+          mount(who, h("a", { href: "/account", class: active === "account" ? "active" : null, title: me.key_name ? `Signed in with key "${me.key_name}"` : `Signed in (${me.role})` }, label), " · ",
             h("a", { href: "#", onclick: async (e) => {
               e.preventDefault();
               await api("POST", "/auth/logout").catch(() => {});
@@ -281,16 +284,20 @@
     } else {
       signInLink();
     }
-    return h(
-      "header",
-      { class: "topbar" },
-      h("a", { class: "brand", href: "/" }, "BLST"),
-      h("nav", { class: "mainnav", "aria-label": "Main menu" },
-        links.map(([id, href, label, short]) =>
-          h("a", { href, class: id === active ? "active" : null, "aria-current": id === active ? "page" : null, "aria-label": label },
-            icon(id), h("span", { class: "long" }, label), h("span", { class: "short", "aria-hidden": "true" }, short)))),
-      who,
-    );
+    const brand = h("a", { class: "brand", href: "/" }, "Beer League Stats");
+    const nav = h("nav", { class: "mainnav", "aria-label": "Main menu" });
+    const renderNav = () => {
+      const links = navLinks();
+      nav.style.setProperty("--n", String(links.length));
+      mount(nav, links.map(([id, href, label, short]) =>
+        h("a", { href, class: id === active ? "active" : null, "aria-current": id === active ? "page" : null, "aria-label": label },
+          icon(id), h("span", { class: "long" }, label), h("span", { class: "short", "aria-hidden": "true" }, short))));
+      brand.textContent = ORG ? ORG.name : "Beer League Stats";
+      brand.title = ORG ? `${ORG.name} on Beer League Stats` : "Beer League Stats";
+    };
+    renderNav();
+    ready.then(renderNav);
+    return h("header", { class: "topbar" }, brand, nav, who);
   }
 
   function tabs(names, onChange, initial, { size } = {}) {
@@ -309,7 +316,9 @@
     return { el: bar, get current() { return current; }, set(id) { current = id; render(); onChange(id); } };
   }
 
-  // BLPA Factions: the six Orders (fixed; same colors as the original console).
+  // Factions: the current organization's own factions (names, emoji,
+  // colours) are loaded into ORDERS / ORDER by `ready`; BLPA's six Orders
+  // are only the starting value.
   const ORDERS = [
     { slug: "varghona", name: "Varghona", animal: "wolf", emoji: "🐺", color: "#64748b" },
     { slug: "tuskarium", name: "Tuskarium", animal: "elephant", emoji: "🐘", color: "#78716c" },
@@ -319,17 +328,38 @@
     { slug: "ursonne", name: "Ursonne", animal: "bear", emoji: "🐻", color: "#d97706" },
   ];
   const ORDER = Object.fromEntries(ORDERS.map((o) => [o.slug, o]));
+  function setFactions(list) {
+    ORDERS.splice(0, ORDERS.length, ...list);
+    for (const k of Object.keys(ORDER)) delete ORDER[k];
+    for (const o of list) ORDER[o.slug] = o;
+  }
+
+  // Which organization this address belongs to (null on the platform) and
+  // its factions. Pages `await BLST.ready` before drawing.
+  let ORG = null;
+  let PLATFORM = null;
+  const ready = (async () => {
+    try {
+      const r = await get("/org");
+      ORG = r.org;
+      PLATFORM = r.platform;
+      setFactions(ORG && ORG.factions_enabled ? await get("/factions/definitions") : []);
+    } catch {
+      /* offline or no organization: pages show their own errors */
+    }
+    return { org: ORG, platform: PLATFORM };
+  })();
   /** Small colored pill: "🐺 Varghona". Links to the Factions page unless link === false. */
   function orderBadge(slug, { link = true, big = false, compact = false } = {}) {
     const o = ORDER[slug];
     if (!o) return "";
-    const attrs = { class: `order-badge${big ? " big" : ""}${compact ? " compact" : ""}`, style: { "--order": o.color }, title: `${o.name} (${o.animal})`, "aria-label": compact ? o.name : null };
+    const attrs = { class: `order-badge${big ? " big" : ""}${compact ? " compact" : ""}`, style: { "--order": o.color }, title: o.name, "aria-label": compact ? o.name : null };
     const label = compact ? [o.emoji] : [o.emoji, " ", o.name];
-    return link ? h("a", { ...attrs, href: `/factions.html#${o.slug}` }, ...label) : h("span", attrs, ...label);
+    return link ? h("a", { ...attrs, href: `/factions#${o.slug}` }, ...label) : h("span", attrs, ...label);
   }
 
   window.BLST = {
-    ORDERS, ORDER, orderBadge,
+    ORDERS, ORDER, orderBadge, ready, get org() { return ORG; }, get platform() { return PLATFORM; },
     api, get, getToken, setToken, h, mount, append, $, param, fmtClock, fmtSec, fmtPct, fmtDate, fmtDay,
     clockFrom, stream, toast, debounce, statusBadge, teamDot, table, topbar, tabs,
   };
@@ -364,7 +394,7 @@
       const live = g.status === "live" || g.status === "intermission";
       const card = h(
         "a",
-        { class: "card game-card", href: `/game.html?id=${g.id}` },
+        { class: "card game-card", href: `/game?id=${g.id}` },
         h("div", { class: "line" }, h("span", null, window.BLST.gameTeamMark(g, "away"), g.away_team), h("span", { class: "score" }, g.status === "scheduled" ? "" : g.away_score)),
         h("div", { class: "line" }, h("span", null, window.BLST.gameTeamMark(g, "home"), g.home_team), h("span", { class: "score" }, g.status === "scheduled" ? "" : g.home_score)),
         h(

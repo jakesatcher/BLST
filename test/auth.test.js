@@ -70,7 +70,8 @@ test("standard user signs up with email + SMS codes; only email and phone are st
   const r = await signUp("Fan@Example.com", "(555) 201-0001");
   assert.match(r.token, /^blss_/);
   assert.equal(r.account.email, "fan@example.com");
-  assert.equal(r.account.role, "user");
+  assert.equal(r.account.platform_admin, false);
+  assert.deepEqual(r.account.orgs, [], "a new account has no access to any organization");
   assert.equal(r.account.phone, "•••• 0001", "phone is masked in responses");
 
   const me = await call("GET", "/account", { token: r.token });
@@ -81,7 +82,7 @@ test("standard user signs up with email + SMS codes; only email and phone are st
 
   // Data minimization: the only personal data columns are email and phone.
   const cols = (await db.many("SELECT column_name FROM information_schema.columns WHERE table_name = 'accounts' ORDER BY ordinal_position")).map((c) => c.column_name);
-  assert.deepEqual(cols, ["id", "email", "phone", "role", "tournament_id", "created_at", "last_login_at", "disabled_at"]);
+  assert.deepEqual(cols, ["id", "email", "phone", "role", "created_at", "last_login_at", "disabled_at"]);
   const row = await db.one("SELECT email, phone FROM accounts WHERE email = 'fan@example.com'");
   assert.equal(row.phone, "+15552010001");
   // Codes and session tokens are stored only as hashes.
@@ -168,13 +169,14 @@ test("global admin setup: setup key once, MFA required, then ADMIN_TOKEN is reti
   assert.equal(st.setup_needed, true);
   assert.equal(st.setup_key_required, true);
   // Before any admin account exists the admin password still works.
-  assert.equal((await call("GET", "/admin/accounts", { token: ADMIN })).status, 200);
+  assert.equal((await call("GET", "/admin/members", { token: ADMIN })).status, 200);
 
   assert.equal((await call("POST", "/auth/setup", { body: { setup_key: "wrong", email: "boss@example.com", phone: "+15552010010" }, ip: nextIp() })).status, 403);
   const ip = nextIp();
   const start = await call("POST", "/auth/setup", { body: { setup_key: ADMIN, email: "boss@example.com", phone: "+15552010010" }, ip });
   const done = await finish(start, "boss@example.com", "+15552010010", ip);
-  assert.equal(done.account.role, "admin");
+  assert.equal(done.account.platform_admin, true);
+  assert.deepEqual(done.account.orgs.map((o) => [o.slug, o.role]), [["blpa", "admin"]], "and runs the first organization");
   const boss = done.token;
 
   st = (await call("GET", "/auth/status")).body;
@@ -182,7 +184,7 @@ test("global admin setup: setup key once, MFA required, then ADMIN_TOKEN is reti
   assert.equal((await call("POST", "/auth/setup", { body: { setup_key: ADMIN, email: "x@example.com", phone: "+15552010011" }, ip: nextIp() })).status, 409);
 
   // ADMIN_TOKEN no longer grants access; the MFA'd admin session does.
-  const retired = await call("GET", "/admin/accounts", { token: ADMIN, ip: nextIp() });
+  const retired = await call("GET", "/admin/members", { token: ADMIN, ip: nextIp() });
   assert.equal(retired.status, 401);
   assert.match(retired.body.error, /retired/);
   const me = await call("GET", "/me", { token: boss });
@@ -193,7 +195,7 @@ test("global admin setup: setup key once, MFA required, then ADMIN_TOKEN is reti
   // Break-glass brings it back (for a lost phone).
   config.auth.adminTokenBreakGlass = true;
   try {
-    assert.equal((await call("GET", "/admin/accounts", { token: ADMIN, ip: nextIp() })).status, 200);
+    assert.equal((await call("GET", "/admin/members", { token: ADMIN, ip: nextIp() })).status, 200);
   } finally {
     config.auth.adminTokenBreakGlass = false;
   }
@@ -205,40 +207,60 @@ test("global admin setup: setup key once, MFA required, then ADMIN_TOKEN is reti
   assert.match(old.body.error, /expired/);
 });
 
-test("admins promote, scope, disable and protect the last admin", async () => {
+test("organization admins give people access by email; platform admins manage accounts", async () => {
   const boss = (await signIn("boss@example.com", "+15552010010")).token;
   const sk = await signUp("rink@example.com", "+15552010020");
   const t = await call("POST", "/tournaments", { token: boss, body: { name: "Scoped Cup", num_teams: 2 } });
   const t2 = await call("POST", "/tournaments", { token: boss, body: { name: "Other Cup", num_teams: 2 } });
 
-  const list = await call("GET", "/admin/accounts", { token: boss });
-  assert.ok(list.body.every((a) => /^•••• \d{4}$/.test(a.phone)), "admins see masked phones only");
+  // Standard users can't administer anything.
+  assert.equal((await call("GET", "/admin/members", { token: sk.token })).status, 403);
+  assert.equal((await call("POST", "/tournaments", { token: sk.token, body: { name: "x" } })).status, 403);
 
-  // Standard users can't administer accounts.
-  assert.equal((await call("GET", "/admin/accounts", { token: sk.token })).status, 403);
-
-  const up = await call("PATCH", `/admin/accounts/${sk.account.id}`, { token: boss, body: { role: "scorekeeper", tournament_id: t.body.id } });
-  assert.equal(up.status, 200);
-  assert.equal(up.body.role, "scorekeeper");
-  // A role change ends existing sessions; the user signs in again.
-  assert.equal((await call("GET", "/account", { token: sk.token, ip: nextIp() })).status, 401);
-  const skTok = (await signIn("rink@example.com", "+15552010020")).token;
+  // An existing account gets access right away (no new sign-in needed).
+  const add = await call("POST", "/admin/members", { token: boss, body: { email: "Rink@Example.com", role: "scorekeeper", tournament_id: t.body.id } });
+  assert.equal(add.status, 201);
+  assert.equal(add.body.added, true);
+  const me = (await call("GET", "/me", { token: sk.token })).body;
+  assert.equal(me.role, "scorekeeper");
+  assert.equal(me.tournament_id, t.body.id);
   const teams = (await call("GET", `/tournaments/${t.body.id}`)).body.teams;
   const teams2 = (await call("GET", `/tournaments/${t2.body.id}`)).body.teams;
   const g = await call("POST", `/tournaments/${t.body.id}/games`, { token: boss, body: { home_team_id: teams[0].id, away_team_id: teams[1].id } });
   const g2 = await call("POST", `/tournaments/${t2.body.id}/games`, { token: boss, body: { home_team_id: teams2[0].id, away_team_id: teams2[1].id } });
-  assert.equal((await call("POST", `/games/${g.body.id}/start`, { token: skTok })).status, 200);
-  assert.equal((await call("POST", `/games/${g2.body.id}/start`, { token: skTok })).status, 403, "scoped to one tournament");
+  assert.equal((await call("POST", `/games/${g.body.id}/start`, { token: sk.token })).status, 200);
+  assert.equal((await call("POST", `/games/${g2.body.id}/start`, { token: sk.token })).status, 403, "scoped to one tournament");
 
-  // The only admin can't demote, disable or delete themselves.
+  // Someone without an account is invited, and gets access when they sign up.
+  const inv = await call("POST", "/admin/members", { token: boss, body: { email: "newbie@example.com", role: "admin" } });
+  assert.equal(inv.body.invited, true);
+  const members = (await call("GET", "/admin/members", { token: boss })).body;
+  assert.ok(members.members.every((m) => /^•••• \d{4}$/.test(m.phone)), "admins see masked phones only");
+  assert.deepEqual(members.invites.map((i) => i.email), ["newbie@example.com"]);
+  const newbie = await signUp("newbie@example.com", "+15552010021");
+  assert.deepEqual(newbie.account.orgs.map((o) => [o.slug, o.role]), [["blpa", "admin"]]);
+  assert.equal((await call("GET", "/admin/members", { token: boss })).body.invites.length, 0);
+  // Organization admins aren't platform admins.
+  assert.equal((await call("GET", "/platform/accounts", { token: newbie.token })).status, 403);
+  // …but they get the short admin session.
+  await db.query("UPDATE auth_sessions SET created_at = now() - interval '13 hours' WHERE account_id = $1", [newbie.account.id]);
+  assert.equal((await call("GET", "/me", { token: newbie.token, ip: nextIp() })).status, 401);
+  await call("DELETE", `/admin/members/${newbie.account.id}`, { token: boss });
+
+  // The only admin of an organization can't step down or delete themselves.
   const bossId = (await call("GET", "/account", { token: boss })).body.id;
-  assert.equal((await call("PATCH", `/admin/accounts/${bossId}`, { token: boss, body: { role: "user" } })).status, 409);
-  assert.equal((await call("PATCH", `/admin/accounts/${bossId}`, { token: boss, body: { disabled: true } })).status, 409);
+  assert.equal((await call("PATCH", `/admin/members/${bossId}`, { token: boss, body: { role: "scorekeeper" } })).status, 409);
+  assert.equal((await call("DELETE", `/admin/members/${bossId}`, { token: boss })).status, 409);
   assert.equal((await call("DELETE", "/account", { token: boss })).status, 409);
+  // …nor stop being the only platform admin.
+  assert.equal((await call("PATCH", `/platform/accounts/${bossId}`, { token: boss, body: { platform_admin: false } })).status, 409);
+  assert.equal((await call("PATCH", `/platform/accounts/${bossId}`, { token: boss, body: { disabled: true } })).status, 409);
 
-  // Disabling ends sessions and blocks sign-in (indistinguishably).
-  assert.equal((await call("PATCH", `/admin/accounts/${sk.account.id}`, { token: boss, body: { disabled: true } })).status, 200);
-  assert.equal((await call("GET", "/me", { token: skTok, ip: nextIp() })).status, 401);
+  // Platform admins can disable an account: sessions end, sign-in is ghosted.
+  const list = (await call("GET", "/platform/accounts", { token: boss })).body;
+  assert.ok(list.find((a) => a.email === "rink@example.com").orgs.some((o) => o.slug === "blpa" && o.role === "scorekeeper"));
+  assert.equal((await call("PATCH", `/platform/accounts/${sk.account.id}`, { token: boss, body: { disabled: true } })).status, 200);
+  assert.equal((await call("GET", "/me", { token: sk.token, ip: nextIp() })).status, 401);
   const before = outbox.length;
   const s = await call("POST", "/auth/login", { body: { email: "rink@example.com" }, ip: nextIp() });
   assert.equal(s.status, 202);

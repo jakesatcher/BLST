@@ -48,7 +48,7 @@ async function authenticate(req, res, next) {
   }
   const token = extractToken(req);
   if (!config.adminToken && config.allowOpenDev) {
-    req.auth = { role: "admin", via: "dev-open" };
+    req.auth = { role: "admin", via: "dev-open", platformAdmin: true };
     return next();
   }
   if (!token) return next();
@@ -64,9 +64,16 @@ async function authenticate(req, res, next) {
   if (accounts.isSessionToken(token)) {
     const a = await accounts.resolveSession(token);
     if (a) {
+      // Access is per organization: a platform admin is an admin everywhere;
+      // anyone else has the role their membership here gives them.
+      const platformAdmin = a.role === "admin";
+      const m = req.org && !platformAdmin
+        ? await db.one("SELECT role, tournament_id FROM org_members WHERE account_id = $1", [a.id])
+        : null;
+      const role = platformAdmin ? "admin" : m ? m.role : "user";
       req.auth = {
-        role: a.role, via: "session", accountId: a.id, sessionId: a.session_id, email: a.email,
-        tournamentId: a.role === "scorekeeper" ? a.tournament_id : null, actor: `account:${a.id}`,
+        role, via: "session", accountId: a.id, sessionId: a.session_id, email: a.email, platformAdmin,
+        tournamentId: m && m.role === "scorekeeper" ? m.tournament_id : null, actor: `account:${a.id}`,
       };
       return next();
     }
@@ -80,7 +87,7 @@ async function authenticate(req, res, next) {
       req.auth = { role: null, via: "admin-token-retired" };
       return next(new HttpError(401, "the admin password is retired now that admin accounts exist; sign in with your email"));
     }
-    req.auth = { role: "admin", via: "admin-token", actor: "admin-token" };
+    req.auth = { role: "admin", via: "admin-token", actor: "admin-token", platformAdmin: true };
     return next();
   }
   const key = await db.one(
@@ -116,6 +123,12 @@ function requireInteractiveAdmin(req, res, next) {
   });
 }
 
+/** The platform (all organizations): platform admins only. */
+function requirePlatformAdmin(req, _res, next) {
+  if (req.auth && req.auth.platformAdmin) return next();
+  next(new HttpError(req.auth && req.auth.role ? 403 : 401, req.auth && req.auth.role ? "requires a platform admin" : "sign in first"));
+}
+
 /** Routes for the signed-in account itself (not API keys). */
 function requireAccount(req, _res, next) {
   if (req.auth && req.auth.via === "session") return next();
@@ -146,5 +159,5 @@ function generateKey() {
 }
 
 module.exports = {
-  authenticate, requireRole, requireAccount, requireInteractiveAdmin, hasRole, assertTournamentScope, hashKey, generateKey, safeEqual, failures, MIN_ADMIN_TOKEN_LENGTH,
+  authenticate, requireRole, requireAccount, requireInteractiveAdmin, requirePlatformAdmin, hasRole, assertTournamentScope, hashKey, generateKey, safeEqual, failures, MIN_ADMIN_TOKEN_LENGTH,
 };

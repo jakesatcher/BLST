@@ -2,6 +2,7 @@ const fs = require("fs");
 const path = require("path");
 const { Pool, types } = require("pg");
 const config = require("../config");
+const { currentOrg } = require("../lib/context");
 
 // DATE columns come back as plain "YYYY-MM-DD" strings instead of Dates
 // shifted into the server's timezone.
@@ -37,8 +38,34 @@ async function useRuntimeUrl(url) {
   if (old) await old.end().catch(() => {});
 }
 
+/** Points a connection at the current organization (row-level security). */
+async function applyOrg(client) {
+  const org = String(currentOrg());
+  if (client.blstOrg !== org) {
+    await client.query("SELECT set_config('app.org_id', $1, false)", [org]);
+    client.blstOrg = org;
+  }
+}
+
+/** A pooled client already set to the current organization. Release it. */
+async function connect() {
+  const client = await getPool().connect();
+  try {
+    await applyOrg(client);
+  } catch (err) {
+    client.release(err);
+    throw err;
+  }
+  return client;
+}
+
 async function query(text, params) {
-  return getPool().query(text, params);
+  const client = await connect();
+  try {
+    return await client.query(text, params);
+  } finally {
+    client.release();
+  }
 }
 
 async function one(text, params) {
@@ -53,7 +80,7 @@ async function many(text, params) {
 
 /** Runs fn(client) inside BEGIN/COMMIT, rolling back on any throw. */
 async function tx(fn) {
-  const client = await getPool().connect();
+  const client = await connect();
   try {
     await client.query("BEGIN");
     const result = await fn(client);
@@ -84,6 +111,9 @@ async function migrate({ log = console.log } = {}) {
   const c = await mpool.connect();
   try {
     await c.query("SET statement_timeout = 0");
+    // Migrations work on every organization's rows.
+    await c.query("SELECT set_config('app.org_id', '*', false)");
+    c.blstOrg = "*";
     await c.query("SELECT pg_advisory_lock(727274)");
     const exists = (await c.query("SELECT to_regclass('schema_migrations') IS NOT NULL AS ok")).rows[0].ok;
     if (!exists) {
@@ -109,6 +139,10 @@ async function migrate({ log = console.log } = {}) {
   } finally {
     await c.query("SELECT pg_advisory_unlock(727274)").catch(() => {});
     await c.query("RESET statement_timeout").catch(() => {});
+    if (!separate) {
+      await c.query("SELECT set_config('app.org_id', '', false)").catch(() => {});
+      c.blstOrg = "";
+    }
     c.release();
     if (separate) await mpool.end();
   }
@@ -122,4 +156,4 @@ async function close() {
   }
 }
 
-module.exports = { getPool, useRuntimeUrl, query, one, many, tx, migrate, close };
+module.exports = { getPool, connect, useRuntimeUrl, query, one, many, tx, migrate, close };

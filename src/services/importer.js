@@ -177,7 +177,7 @@ async function runImport(body, perRow, finish) {
   const dryRun = Boolean(body.dry_run);
   const skipErrors = Boolean(body.skip_errors);
   const report = { rows: rows.length, imported: 0, created_players: 0, created_teams: 0, moved: 0, errors: [], dry_run: dryRun };
-  const client = await db.getPool().connect();
+  const client = await db.connect();
   try {
     await client.query("BEGIN");
     for (let i = 0; i < rows.length; i++) {

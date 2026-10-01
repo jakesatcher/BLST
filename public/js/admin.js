@@ -90,16 +90,22 @@
   // -------------------------------------------------------------------------
   // Shell
 
+  await BLST.ready;
+  const factionsOn = Boolean(BLST.org && BLST.org.factions_enabled);
   const view = h("div");
-  const mainTabs = tabs([["tournaments", "Tournaments"], ["players", "Players"], ["history", "Historical import"], ["accounts", "Accounts"], ["keys", "API keys"], ["webhooks", "Webhooks"], ["factions", "Factions"], ["security", "Security"]],
-    (t) => { history.replaceState(null, "", `#${t}`); show(t); }, location.hash.slice(1).split("/")[0] || "tournaments", { size: "big" });
+  const tabNames = [["tournaments", "Tournaments"], ["players", "Players"], ["history", "Historical import"], ["org", "Organization"], ["keys", "API keys"], ["webhooks", "Webhooks"],
+    ...(factionsOn ? [["factions", "Factions"]] : []), ["security", "Security"]];
+  let firstTab = location.hash.slice(1).split("/")[0] || "tournaments";
+  if (firstTab === "accounts") firstTab = "org";
+  if (!tabNames.some(([id]) => id === firstTab)) firstTab = "tournaments";
+  const mainTabs = tabs(tabNames, (t) => { history.replaceState(null, "", `#${t}`); show(t); }, firstTab, { size: "big" });
   mount(app,
     h("div", { class: "row between" }, h("h1", null, "Admin"),
       me.via === "dev-open" ? h("span", { class: "badge" }, "dev mode: no ADMIN_TOKEN set") : ""),
     mainTabs.el, view);
 
   function show(tab) {
-    const fn = { tournaments: tournamentsView, players: playersView, history: historyView, accounts: accountsView, keys: keysView, webhooks: webhooksView, factions: factionsGlobalView, security: securityView }[tab];
+    const fn = { tournaments: tournamentsView, players: playersView, history: historyView, org: orgView, keys: keysView, webhooks: webhooksView, factions: factionsGlobalView, security: securityView }[tab];
     mount(view, h("p", { class: "muted" }, "Loading…"));
     fn().catch((err) => mount(view, h("p", { class: "notice error" }, err.message)));
   }
@@ -118,13 +124,13 @@
     const body = h("div");
     mount(view,
       h("div", { class: "row between", style: { marginBottom: "12px" } },
-        h("div", { class: "row" }, h("strong", null, "Tournament"), picker, selectedTid ? h("a", { href: `/tournament.html?id=${selectedTid}`, target: "_blank" }, "Public page ↗") : ""),
+        h("div", { class: "row" }, h("strong", null, "Tournament"), picker, selectedTid ? h("a", { href: `/tournament?id=${selectedTid}`, target: "_blank" }, "Public page ↗") : ""),
         h("button", { class: "primary", onclick: () => { selectedTid = null; mount(body, newTournamentForm()); } }, "New tournament")),
       body);
     if (!selectedTid) return mount(body, newTournamentForm());
     const t = await get(`/tournaments/${selectedTid}`);
     const sub = h("div");
-    const subTabs = tabs([["registrations", "Registrations"], ["teams", "Teams & rosters"], ["schedule", "Schedule"], ["import", "Draft / roster upload"], ["streams", "Streams"], ["moves", "Moves"], ["settings", "Settings"], ["factions", "Factions"]],
+    const subTabs = tabs([["registrations", "Registrations"], ["teams", "Teams & rosters"], ["schedule", "Schedule"], ["import", "Draft / roster upload"], ["streams", "Streams"], ["moves", "Moves"], ["settings", "Settings"], ...(factionsOn ? [["factions", "Factions"]] : [])],
       (s) => tournamentSub(s, t, sub), "teams", { size: "medium" });
     const checklist = h("div");
     mount(body, checklist, subTabs.el, sub);
@@ -141,8 +147,8 @@
       ["Put players on every team: upload the draft results CSV", t.teams.length > 0 && t.teams.every((x) => x.player_count > 0), "Upload rosters", () => subTabs.set("import")],
       ["Schedule games", games.length > 0, "Schedule", () => subTabs.set("schedule")],
       ["Create a scorekeeper key for each rink device", keys.some((k) => k.role === "scorekeeper" && !k.revoked_at), "API keys", () => mainTabs.set("keys")],
-      ["Count it for BLPA Factions, so games earn points for each player's Order", Boolean(t.factions_event_id), "Factions", () => subTabs.set("factions")],
-      ["Score a game", games.some((g) => g.status !== "scheduled"), "Open scorekeeper", () => (location.href = "/scorekeeper.html")],
+      ["Count it for Factions, so games earn points for each player's faction", Boolean(t.factions_event_id), "Factions", () => subTabs.set("factions")],
+      ["Score a game", games.some((g) => g.status !== "scheduled"), "Open scorekeeper", () => (location.href = "/scorekeeper")],
     ];
     const done = steps.filter((x) => x[1]).length;
     if (done === steps.length) return mount(el);
@@ -156,7 +162,7 @@
 
   function tournamentFormFields(t = {}) {
     return [
-      field("Name", input("name", { required: true, value: t.name || "", placeholder: "BLPA Fall Classic" }), "wide"),
+      field("Name", input("name", { required: true, value: t.name || "", placeholder: "Fall Classic" }), "wide"),
       field("Season", input("season", { value: t.season || "" })),
       field("Location", input("location", { value: t.location || "" })),
       field("Start date", input("start_date", { type: "date", value: t.start_date || "" })),
@@ -352,7 +358,7 @@
     } },
       field("First name", input("first_name", { required: true })),
       field("Last name", input("last_name", { required: true })),
-      field("Email (gives them their Factions Order)", input("email", { type: "email" })),
+      field("Email (needed for Factions)", input("email", { type: "email" })),
       field("Shoots", select("shoots", [["", "—"], "L", "R"], "")),
       h("div", null, h("button", { class: "primary" }, "Create & add")));
 
@@ -407,8 +413,8 @@
           { key: "status", label: "Status", fmt: (g) => statusBadge(g) },
           { key: "score", label: "Score", sort: false, fmt: (g) => (g.status === "scheduled" ? "" : `${g.away_score}–${g.home_score}`) },
           { key: "actions", label: "", sort: false, fmt: (g) => h("div", { class: "row", style: { justifyContent: "flex-end" } },
-            h("a", { class: "btn sm", href: `/scorekeeper.html?game=${g.id}` }, "Score"),
-            h("a", { class: "btn sm", href: `/game.html?id=${g.id}`, target: "_blank" }, "View"),
+            h("a", { class: "btn sm", href: `/scorekeeper?game=${g.id}` }, "Score"),
+            h("a", { class: "btn sm", href: `/game?id=${g.id}`, target: "_blank" }, "View"),
             h("button", { class: "sm", onclick: async () => {
               const v = await formSheet(`${g.away_team} @ ${g.home_team}`, [
                 { name: "scheduled_at", label: "Start time", type: "datetime", value: g.scheduled_at },
@@ -517,7 +523,7 @@
               mount(review, h("div", { class: "card" },
                 h("p", { class: "notice" }, h("strong", null, "Rosters saved. "), `${done.imported} players imported${done.removed && done.removed.length ? `, ${done.removed.length} taken off rosters` : ""}.`),
                 h("div", { class: "row" }, h("button", { class: "primary", onclick: () => tournamentsView() }, "See the teams"),
-                  h("a", { class: "btn", href: `/tournament.html?id=${t.id}#teams`, target: "_blank" }, "Public rosters ↗"))));
+                  h("a", { class: "btn", href: `/tournament?id=${t.id}#teams`, target: "_blank" }, "Public rosters ↗"))));
             } catch (err) {
               if (err.data && err.data.errors) renderReview(err.data, body);
               else toast(err.message, true);
@@ -542,7 +548,7 @@
 
     mount(el, h("div", { class: "steps" },
       h("div", { class: "card" }, h("h2", null, "Get the template"),
-        h("p", { class: "muted" }, "One line per player: team, jersey number, name, and optionally position, C/A, email (needed for BLPA Factions), draft round and pick. Your own draft spreadsheet works too if its columns are named like these."),
+        h("p", { class: "muted" }, "One line per player: team, jersey number, name, and optionally position, C/A, email (needed for Factions), draft round and pick. Your own draft spreadsheet works too if its columns are named like these."),
         h("div", { class: "row" },
           h("button", { class: "primary", onclick: () => BLST.downloadAuthed(`/tournaments/${t.id}/roster.csv?template=1`, "roster-template.csv").catch((e) => toast(e.message, true)) }, "Download template"),
           hasRosters ? h("button", { onclick: () => BLST.downloadAuthed(`/tournaments/${t.id}/roster.csv`, "rosters.csv").catch((e) => toast(e.message, true)) }, "Download current rosters") : ""),
@@ -591,7 +597,7 @@
           h("h3", null, "Imported history"),
           l.historical_stats.length ? table([{ key: "season", label: "Season" }, { key: "event_name", label: "Event" }, { key: "gp", label: "GP", num: true },
             { key: "goals", label: "G", num: true }, { key: "assists", label: "A", num: true }], l.historical_stats) : h("p", { class: "muted" }, "None"),
-          h("a", { href: `/player.html?id=${p.id}`, target: "_blank" }, "Career stats page ↗")),
+          h("a", { href: `/player?id=${p.id}`, target: "_blank" }, "Career stats page ↗")),
           (close) => [h("button", { onclick: () => close() }, "Close")]);
       } catch (err) {
         toast(err.message, true);
@@ -768,7 +774,7 @@
     mount(el,
       h("div", { class: "card" }, h("h2", null, "Streams & live overlay"),
         h("p", { class: "muted" }, "Viewers tap ▶ Watch on any game. If the rink has a video embed, the video plays on BLST with the live score overlay on top. If it only has a LiveBarn link, viewers open LiveBarn with their own subscription and BLST shows the live scorebug next to it (pop-out window on a computer, Split View on iPad)."),
-        h("p", { class: "muted small" }, "LiveBarn doesn't offer a public embed or API, and its pages can't be shown inside other sites. If LiveBarn gives BLPA an embed/partner player link for the tournament, paste it as the video embed and use Check. YouTube Live links (your own camera) work as-is.")),
+        h("p", { class: "muted small" }, "LiveBarn doesn't offer a public embed or API, and its pages can't be shown inside other sites. If LiveBarn gives your league an embed/partner player link for the tournament, paste it as the video embed and use Check. YouTube Live links (your own camera) work as-is.")),
       rinks.length ? "" : h("p", { class: "muted" }, "No rinks yet. Give games a rink on the Schedule tab, or add one below."),
       grid,
       h("div", { class: "card", style: { marginTop: "16px" } }, h("h3", null, "Add a rink"),
@@ -785,9 +791,9 @@
           { key: "m", label: "Game", sort: false, fmt: (g) => `${g.away_team} @ ${g.home_team}${g.venue ? ` · ${g.venue}` : ""}` },
           { key: "has_stream", label: "Video", fmt: (g) => (g.has_stream ? "✓" : "—") },
           { key: "x", label: "", sort: false, fmt: (g) => h("div", { class: "actions" },
-            h("a", { class: "btn sm", href: `/watch.html?game=${g.id}`, target: "_blank" }, "Watch"),
+            h("a", { class: "btn sm", href: `/watch?game=${g.id}`, target: "_blank" }, "Watch"),
             h("button", { class: "sm", onclick: async () => {
-              const url = `${location.origin}/overlay.html?game=${g.id}`;
+              const url = `${location.origin}/overlay?game=${g.id}`;
               try {
                 await navigator.clipboard.writeText(url);
                 toast("Overlay link copied");
@@ -825,7 +831,7 @@
       const p = await get(`/tournaments/${t.id}/factions/preview`);
       mount(out, h("h3", null, "Points per player"), table([
         { key: "name", label: "Player" },
-        { key: "order", label: "Order", fmt: (r) => (r.order ? BLST.orderBadge(r.order, { link: false }) : h("span", { class: "muted small" }, "no email")) },
+        { key: "order", label: "Faction", fmt: (r) => (r.order ? BLST.orderBadge(r.order, { link: false }) : h("span", { class: "muted small" }, "no email")) },
         { key: "gp", label: "GP", num: true }, { key: "goals", label: "G", num: true }, { key: "assists", label: "A", num: true },
         { key: "wins", label: "W", num: true }, { key: "shutouts", label: "SO", num: true }, { key: "placement", label: "Place", num: true },
         { key: "points_earned", label: "Points", num: true },
@@ -836,14 +842,14 @@
     mount(el,
       h("div", { class: "card" },
         h("div", { class: "row between" },
-          h("h2", { style: { margin: 0 } }, "BLPA Factions"),
+          h("h2", { style: { margin: 0 } }, "Factions"),
           counts ? h("span", { class: "badge good" }, "Counts for Factions") : h("span", { class: "badge" }, "Not counting")),
         h("p", { class: "muted" }, counts
-          ? `Games in this tournament earn points for each player's Order${status.auto_award ? ", updated every time a game goes final" : ""}. Fans see the result on the tournament's Factions tab and the Factions page.`
-          : "Turn this on and every game here earns Factions points for the players' Orders: games played, goals, assists, wins, shutouts, hat tricks and the title."),
+          ? `Games in this tournament earn points for each player's faction${status.auto_award ? ", updated every time a game goes final" : ""}. Fans see the result on the tournament's Factions tab and the Factions page.`
+          : "Turn this on and every game here earns Factions points for the players' factions: games played, goals, assists, wins, shutouts, hat tricks and the title."),
         h("div", { class: "row" },
           counts
-            ? [h("a", { class: "btn", href: `/tournament.html?id=${t.id}#orders`, target: "_blank" }, "See standings ↗"),
+            ? [h("a", { class: "btn", href: `/tournament?id=${t.id}#orders`, target: "_blank" }, "See standings ↗"),
               h("button", { class: "danger", onclick: async () => {
                 if (!(await confirmSheet("Stop counting this tournament? Points already awarded stay in Factions.", { title: "Stop counting", confirmLabel: "Stop counting" }))) return;
                 await run(() => api("DELETE", `/tournaments/${t.id}/factions/link`), "Stopped counting");
@@ -855,9 +861,9 @@
               refresh();
             } }, "Count this tournament for Factions")),
         noEmail.length
-          ? h("p", { class: "notice small", style: { marginTop: "10px" } }, `${noEmail.length} rostered player${noEmail.length === 1 ? " has" : "s have"} no email, so no Order and no points: `,
+          ? h("p", { class: "notice small", style: { marginTop: "10px" } }, `${noEmail.length} rostered player${noEmail.length === 1 ? " has" : "s have"} no email, so no faction and no points: `,
             noEmail.slice(0, 8).map((p) => `${p.first_name} ${p.last_name}`).join(", "), noEmail.length > 8 ? "…" : "", ". Add emails under Teams & rosters or with the roster upload.")
-          : players.length ? h("p", { class: "muted small", style: { marginTop: "10px" } }, `All ${players.length} rostered players have an Order.`) : ""),
+          : players.length ? h("p", { class: "muted small", style: { marginTop: "10px" } }, `All ${players.length} rostered players have a faction.`) : ""),
       h("div", { class: "card" }, h("h2", null, "Point values"),
         h("p", { class: "muted small" }, "Per player. After playoffs, set each team's final place on Teams & rosters so the champion and runner-up bonuses apply. Hat tricks, shutouts and titles also become achievements."),
         ptsForm,
@@ -884,7 +890,7 @@
         { key: "id", label: "ID", num: true },
         { key: "last_name", label: "Name", fmt: (p) => `${p.first_name} ${p.last_name}` },
         { key: "email", label: "Email" }, { key: "position", label: "Pos" }, { key: "preferred_number", label: "#", num: true },
-        { key: "external_id", label: "External ID" }, { key: "factions_order", label: "Order", fmt: (p) => BLST.orderBadge(p.factions_order, { link: false }) },
+        { key: "external_id", label: "External ID" }, { key: "factions_order", label: "Faction", fmt: (p) => BLST.orderBadge(p.factions_order, { link: false }) },
       ], list, { sortKey: "last_name", sortDir: 1, onRow: (p) => editPlayer(p.id) }));
     };
     search.addEventListener("input", debounce(load, 250));
@@ -893,8 +899,8 @@
       const p = await get(`/players/${id}`);
       const hist = await get(`/players/${id}/history`);
       mount(editor, h("div", { class: "card" },
-        h("div", { class: "row between" }, h("h2", null, `${p.first_name} ${p.last_name}`), h("a", { href: `/player.html?id=${id}`, target: "_blank" }, "Public page ↗")),
-        p.factions_order ? h("p", { class: "small" }, "Factions: ", BLST.orderBadge(p.factions_order), " (from their email; for life)") : h("p", { class: "muted small" }, "No Factions Order until they have an email."),
+        h("div", { class: "row between" }, h("h2", null, `${p.first_name} ${p.last_name}`), h("a", { href: `/player?id=${id}`, target: "_blank" }, "Public page ↗")),
+        p.factions_order ? h("p", { class: "small" }, "Factions: ", BLST.orderBadge(p.factions_order), " (from their email; for life)") : h("p", { class: "muted small" }, "No faction until they have an email."),
         h("form", { class: "form", onsubmit: async (e) => {
           e.preventDefault();
           await run(() => api("PATCH", `/players/${id}`, values(e.target, { blankAsNull: true })), "Saved");
@@ -996,48 +1002,128 @@
   }
 
   // -------------------------------------------------------------------------
-  // Accounts (people who sign in with email + text-message codes)
+  // Organization: Factions on/off, the organization's own factions, and the
+  // people who can run it (members and invitations)
 
-  async function accountsView() {
-    const [list, tournamentsForAccounts] = await Promise.all([get("/admin/accounts"), get("/tournaments")]);
-    const roleLabel = { admin: "Admin", scorekeeper: "Scorekeeper", user: "Standard" };
-    const edit = async (a) => {
-      const v = await formSheet(`Access for ${a.email}`, [
-        { name: "role", label: "Access", type: "select", value: a.role, options: [["user", "Standard (no staff access)"], ["scorekeeper", "Scorekeeper"], ["admin", "Global admin"]] },
-        { name: "tournament_id", label: "Scorekeeper limited to tournament", type: "select", value: a.tournament_id || "",
-          options: [["", "All tournaments"], ...tournamentsForAccounts.map((t) => [t.id, t.name])], hint: "Only applies to scorekeepers." },
-      ], { submitLabel: "Save", intro: "Changing access signs this person out everywhere so the new access applies straight away." });
-      if (!v) return;
-      await run(() => api("PATCH", `/admin/accounts/${a.id}`, { role: v.role, tournament_id: v.tournament_id ? Number(v.tournament_id) : null }), "Access updated");
-      accountsView();
-    };
+  async function orgView() {
+    const peopleBox = h("div");
+    const factionsBox = h("div");
     mount(view,
-      h("div", { class: "card" }, h("h2", null, "Accounts"),
-        h("p", { class: "muted small" }, "Anyone can create a standard account at ", h("a", { href: "/account.html#signup" }, "/account.html"),
-          " with their email and mobile number (both confirmed with one-time codes). Give people scorekeeper or admin access here. Every sign-in needs an emailed code and a texted code. Phone numbers are masked; BLST stores nothing else about account holders."),
+      h("div", { class: "card" },
+        h("h2", null, BLST.org ? BLST.org.name : "Organization"),
+        BLST.org ? h("p", { class: "muted small" }, "Your site: ", h("a", { href: `${BLST.org.url}/stats` }, BLST.org.url.replace(/^https?:\/\//, ""), "/stats"),
+          ". To rename the organization or change its address, ask a platform admin.") : ""),
+      factionsBox, peopleBox);
+    await Promise.all([factionsSetup(factionsBox), peopleView(peopleBox)]);
+  }
+
+  async function factionsSetup(el) {
+    const s = await get("/factions-setup");
+    const reload = () => factionsSetup(el);
+    const toggle = async (on) => {
+      if (!on && !(await confirmSheet("Turn Factions off? The Factions page, badges and points disappear for everyone. Nothing is deleted: turn it back on any time.",
+        { title: "Turn off Factions", confirmLabel: "Turn off", danger: true }))) return;
+      await run(() => api("PUT", "/factions-setup", { enabled: on }), on ? "Factions is on" : "Factions is off");
+      location.reload(); // the menu and pages change
+    };
+    const row = (f) => {
+      const name = h("input", { value: f.name, maxlength: 40, "aria-label": "Faction name" });
+      const emoji = h("input", { value: f.emoji || "", maxlength: 8, class: "emoji", "aria-label": "Emoji" });
+      const color = h("input", { type: "color", value: f.color, "aria-label": "Colour" });
+      return h("div", { class: "faction-row" }, emoji, name, color,
+        h("div", { class: "row" },
+          h("button", { class: "sm", onclick: async () => {
+            await run(() => api("PATCH", `/factions-setup/factions/${f.slug}`, { name: name.value.trim(), emoji: emoji.value.trim() || null, color: color.value }), "Saved");
+            reload();
+          } }, "Save"),
+          h("button", { class: "sm danger", onclick: async () => {
+            if (!(await confirmSheet(`Remove ${f.name}?`, { title: "Remove faction", confirmLabel: "Remove", danger: true }))) return;
+            await run(() => api("DELETE", `/factions-setup/factions/${f.slug}`), "Removed");
+            reload();
+          } }, "Remove")));
+    };
+    const add = async () => {
+      const v = await formSheet("Add a faction", [
+        { name: "name", label: "Name", required: true, placeholder: "Wolves" },
+        { name: "emoji", label: "Emoji (optional)", placeholder: "🐺" },
+        { name: "color", label: "Colour", type: "color", value: "#2563eb" },
+      ], { submitLabel: "Add" });
+      if (!v) return;
+      await run(() => api("POST", "/factions-setup/factions", v), "Added");
+      reload();
+    };
+    mount(el, h("div", { class: "card" },
+      h("div", { class: "row between" }, h("h2", { style: { margin: 0 } }, "Factions"),
+        h("label", { class: "inline" }, h("input", { type: "checkbox", checked: s.enabled, onchange: (e) => toggle(e.target.checked).finally(() => { e.target.checked = s.enabled; }) }), s.enabled ? "On" : "Off")),
+      h("p", { class: "muted small" }, "Factions splits every player with an email into teams-within-the-league that earn points from games, events and achievements. ",
+        "Everyone is placed in a faction for life, from their email. Use it or not: when it's off, the Factions page and badges are hidden."),
+      s.factions.length
+        ? [h("div", { class: "faction-list" }, s.factions.map(row)),
+          h("div", { class: "row", style: { marginTop: "10px" } }, s.factions.length < 24 ? h("button", { onclick: add }, "Add a faction") : "",
+            h("span", { class: "muted small" }, "Once people are in factions, they can be renamed and recoloured but not removed."))]
+        : h("div", null,
+          h("p", null, "No factions yet. Start from a ready-made set or make your own:"),
+          h("div", { class: "row" },
+            Object.entries(s.presets).map(([key, p]) => h("button", { onclick: async () => {
+              await run(() => api("POST", "/factions-setup/factions", { preset: key }), `${p.name} added`);
+              reload();
+            } }, p.name)),
+            h("button", { onclick: add }, "Make my own")))));
+  }
+
+  async function peopleView(el) {
+    const [list, tournamentsForAccounts] = await Promise.all([get("/admin/members"), get("/tournaments")]);
+    const reload = () => peopleView(el);
+    const roleLabel = { admin: "Admin", scorekeeper: "Scorekeeper" };
+    const tournamentOptions = [["", "All tournaments"], ...tournamentsForAccounts.map((t) => [t.id, t.name])];
+    const accessFields = (m = {}) => [
+      { name: "role", label: "Access", type: "select", value: m.role || "scorekeeper", options: [["scorekeeper", "Scorekeeper (runs games)"], ["admin", "Admin (everything)"]] },
+      { name: "tournament_id", label: "Scorekeeper limited to tournament", type: "select", value: m.tournament_id || "", options: tournamentOptions, hint: "Only applies to scorekeepers." },
+    ];
+    const tid = (v) => (v.tournament_id ? Number(v.tournament_id) : null);
+    const addPerson = async () => {
+      const v = await formSheet("Add a person", [{ name: "email", label: "Email", type: "email", required: true }, ...accessFields()],
+        { submitLabel: "Add", intro: "If they don't have an account yet, they get an email invitation and the access applies when they sign up with that address." });
+      if (!v) return;
+      const r = await run(() => api("POST", "/admin/members", { email: v.email, role: v.role, tournament_id: tid(v) }));
+      toast(r.invited ? `Invitation emailed to ${v.email}` : `${v.email} added`);
+      reload();
+    };
+    const edit = async (m) => {
+      const v = await formSheet(`Access for ${m.email}`, accessFields(m), { submitLabel: "Save" });
+      if (!v) return;
+      await run(() => api("PATCH", `/admin/members/${m.account_id}`, { role: v.role, tournament_id: tid(v) }), "Access updated");
+      reload();
+    };
+    mount(el, h("div", { class: "card" },
+      h("div", { class: "row between" }, h("h2", { style: { margin: 0 } }, "People"), h("button", { class: "primary", onclick: addPerson }, "Add a person")),
+      h("p", { class: "muted small" }, "Admins run everything here; scorekeepers run games. Everyone signs in with an emailed code and a texted code. ",
+        "Fans don't need an account."),
+      table([
+        { key: "email", label: "Email", fmt: (m) => h("span", null, m.email, m.account_id === me.account_id ? h("span", { class: "badge", style: { marginLeft: "6px" } }, "you") : "") },
+        { key: "phone", label: "Mobile" },
+        { key: "role", label: "Access", fmt: (m) => `${roleLabel[m.role]}${m.role === "scorekeeper" && m.tournament ? ` · ${m.tournament}` : ""}` },
+        { key: "last_login_at", label: "Last sign-in", fmt: (m) => (m.last_login_at ? fmtDate(m.last_login_at) : "never") },
+        { key: "disabled", label: "", sort: false, fmt: (m) => h("div", { class: "row" },
+          m.disabled ? h("span", { class: "badge" }, "disabled") : "",
+          h("button", { class: "sm", onclick: () => edit(m) }, "Access"),
+          h("button", { class: "sm danger", onclick: async () => {
+            if (!(await confirmSheet(`Remove ${m.email} from ${BLST.org ? BLST.org.name : "this organization"}? Their account stays; they just lose access here.`, { title: "Remove access", confirmLabel: "Remove", danger: true }))) return;
+            await run(() => api("DELETE", `/admin/members/${m.account_id}`), "Removed");
+            reload();
+          } }, "Remove")) },
+      ], list.members, { sortKey: "email", sortDir: 1 }),
+      list.invites.length ? [
+        h("h3", null, "Invitations waiting"),
         table([
-          { key: "email", label: "Email", fmt: (a) => h("span", null, a.email, a.id === me.account_id ? h("span", { class: "badge", style: { marginLeft: "6px" } }, "you") : "") },
-          { key: "phone", label: "Mobile" },
-          { key: "role", label: "Access", fmt: (a) => `${roleLabel[a.role]}${a.role === "scorekeeper" && a.tournament ? ` · ${a.tournament}` : ""}` },
-          { key: "last_login_at", label: "Last sign-in", fmt: (a) => (a.last_login_at ? fmtDate(a.last_login_at) : "never") },
-          { key: "sessions", label: "Devices", num: true },
-          { key: "disabled", label: "", sort: false, fmt: (a) => h("div", { class: "row" },
-            a.disabled ? h("span", { class: "badge" }, "disabled") : "",
-            h("button", { class: "sm", onclick: () => edit(a) }, "Access"),
-            h("button", { class: "sm", onclick: async () => {
-              await run(() => api("POST", `/admin/accounts/${a.id}/logout`), "Signed out everywhere");
-              accountsView();
-            } }, "Sign out"),
-            h("button", { class: "sm", onclick: async () => {
-              await run(() => api("PATCH", `/admin/accounts/${a.id}`, { disabled: !a.disabled }), a.disabled ? "Enabled" : "Disabled");
-              accountsView();
-            } }, a.disabled ? "Enable" : "Disable"),
-            h("button", { class: "sm danger", onclick: async () => {
-              if (!(await confirmSheet(`Delete the account ${a.email}? Their email and phone number are erased.`, { title: "Delete account", confirmLabel: "Delete", danger: true }))) return;
-              await run(() => api("DELETE", `/admin/accounts/${a.id}`), "Deleted");
-              accountsView();
-            } }, "Delete")) },
-        ], list, { sortKey: "email", sortDir: 1 })));
+          { key: "email", label: "Email" },
+          { key: "role", label: "Access", fmt: (i) => `${roleLabel[i.role]}${i.tournament ? ` · ${i.tournament}` : ""}` },
+          { key: "created_at", label: "Sent", fmt: (i) => fmtDate(i.created_at) },
+          { key: "x", label: "", sort: false, fmt: (i) => h("button", { class: "sm", onclick: async () => {
+            await run(() => api("DELETE", `/admin/invites/${encodeURIComponent(i.email)}`), "Invitation withdrawn");
+            reload();
+          } }, "Withdraw") },
+        ], list.invites, { sortKey: "created_at" })] : ""));
   }
 
   // -------------------------------------------------------------------------
@@ -1136,10 +1222,10 @@
     const [s, orders, la] = await Promise.all([get("/factions/status"), get("/factions/orders"), get("/integrations/leagueapps").catch(() => null)]);
     mount(el,
       h("div", { class: "card" },
-        h("div", { class: "row between" }, h("h2", { style: { margin: 0 } }, "Order standings"), h("a", { href: "/factions.html", target: "_blank" }, "Public Factions page ↗")),
+        h("div", { class: "row between" }, h("h2", { style: { margin: 0 } }, "Faction standings"), h("a", { href: "/factions", target: "_blank" }, "Public Factions page ↗")),
         table([
           { key: "rank", label: "#", num: true },
-          { key: "slug", label: "Order", fmt: (r) => BLST.orderBadge(r.slug, { link: false }) },
+          { key: "slug", label: "Faction", fmt: (r) => BLST.orderBadge(r.slug, { link: false }) },
           { key: "members", label: "Members", num: true },
           { key: "event_points", label: "Event pts", num: true },
           { key: "bonus_points", label: "Bonus pts", num: true },
@@ -1147,24 +1233,24 @@
         ], orders, { sortKey: "total_points" })),
       h("div", { class: "card" }, h("h2", null, "How Factions works here"),
         h("ul", { class: "stack", style: { paddingLeft: "18px" } },
-          h("li", null, "Every player with an email belongs to an Order for life, assigned from their email the first time BLST sees it. ", h("strong", null, `${s.members} members`), " so far."),
+          h("li", null, "Every player with an email belongs to a faction for life, assigned from their email the first time BLST sees it. ", h("strong", null, `${s.members} members`), " so far."),
           h("li", null, "Tournaments you mark ", h("em", null, "Count for Factions"), " (Tournaments → Factions) earn points automatically ", s.auto_award ? "as games go final." : "when you press Award (automatic awarding is off: FACTIONS_AUTO_AWARD=false)."),
           h("li", null, "Award bonus points and achievements to anyone under Members; record other events under Events."),
-          s.players_without_email ? h("li", null, `${s.players_without_email} players have no email yet, so they have no Order.`) : ""),
+          s.players_without_email ? h("li", null, `${s.players_without_email} players have no email yet, so they have no faction.`) : ""),
         la && la.configured ? h("div", { class: "row", style: { marginTop: "8px" } },
           h("button", { onclick: async () => {
             const r = await run(() => api("POST", "/integrations/leagueapps/members/sync", {}));
-            toast(`LeagueApps: ${r.new_members} new members, ${r.existing_members} already in an Order`);
+            toast(`LeagueApps: ${r.new_members} new members, ${r.existing_members} already in a faction`);
             fxOverview(el);
           } }, "Import LeagueApps members"),
-          h("span", { class: "muted small" }, la.members?.last_run_at ? `Last run ${fmtDate(la.members.last_run_at)}` : "Gives every LeagueApps member their Order, even before they register.")) : ""));
+          h("span", { class: "muted small" }, la.members?.last_run_at ? `Last run ${fmtDate(la.members.last_run_at)}` : "Gives every LeagueApps member their faction, even before they register.")) : ""));
   }
 
   async function fxMembers(el) {
     const listBox = h("div");
     const detail = h("div");
     const q = h("input", { placeholder: "Search name or email…", style: { minWidth: "240px" }, oninput: debounce(() => load(), 250) });
-    const orderSel = select("order", [["", "All Orders"], ...BLST.ORDERS.map((o) => [o.slug, `${o.emoji} ${o.name}`])], "", { onchange: () => load() });
+    const orderSel = select("order", [["", "All factions"], ...BLST.ORDERS.map((o) => [o.slug, `${o.emoji} ${o.name}`])], "", { onchange: () => load() });
     const load = async () => {
       const params = new URLSearchParams({ limit: "200" });
       if (q.value.trim()) params.set("q", q.value.trim());
@@ -1175,7 +1261,7 @@
         table([
           { key: "display_name", label: "Name", fmt: (m) => m.display_name || h("span", { class: "muted" }, "—") },
           { key: "email", label: "Email" },
-          { key: "order_slug", label: "Order", fmt: (m) => BLST.orderBadge(m.order_slug, { link: false }) },
+          { key: "order_slug", label: "Faction", fmt: (m) => BLST.orderBadge(m.order_slug, { link: false }) },
           { key: "total_points", label: "Points", num: true },
           { key: "events", label: "Events", num: true },
           { key: "achievements_count", label: "Awards", num: true },
@@ -1190,10 +1276,10 @@
           BLST.orderBadge(m.order_slug, { big: true })),
         h("dl", { class: "kv", style: { marginTop: "10px" } },
           h("dt", null, "Total"), h("dd", null, `${m.total_points} pts (${m.event_points} from events, ${m.bonus_points} bonus)`),
-          h("dt", null, "BLST player"), h("dd", null, m.player ? h("a", { href: `/player.html?id=${m.player.id}` }, m.player.name) : "—"),
+          h("dt", null, "BLST player"), h("dd", null, m.player ? h("a", { href: `/player?id=${m.player.id}` }, m.player.name) : "—"),
           h("dt", null, "Member since"), h("dd", null, fmtDate(m.created_at, { month: "short", day: "numeric", year: "numeric" })),
           m.leagueapps_user_id ? [h("dt", null, "LeagueApps id"), h("dd", null, m.leagueapps_user_id)] : ""),
-        h("p", { class: "muted small" }, "An Order is for life: it can't be changed."),
+        h("p", { class: "muted small" }, "A faction is for life: it can't be changed."),
         h("div", { class: "grid two" },
           h("form", { class: "stack", onsubmit: async (e) => {
             e.preventDefault();
@@ -1246,10 +1332,10 @@
       const [e, totals] = await Promise.all([get(`/factions/events/${encodeURIComponent(id)}`), get(`/factions/events/${encodeURIComponent(id)}/totals`)]);
       mount(detail, h("div", { class: "card" },
         h("h2", null, e.name),
-        e.tournament_id ? h("p", { class: "muted small" }, "Points for this event come from the tournament ", h("a", { href: `/tournament.html?id=${e.tournament_id}` }, e.tournament_name),
+        e.tournament_id ? h("p", { class: "muted small" }, "Points for this event come from the tournament ", h("a", { href: `/tournament?id=${e.tournament_id}` }, e.tournament_name),
           ". Recording someone here by hand is kept until the tournament is awarded again.") : "",
         h("div", { class: "order-strip" }, [...totals].sort((a, b) => a.rank - b.rank).map((o) =>
-          h("a", { href: `/factions.html#${o.slug}`, style: { "--order": BLST.ORDER[o.slug].color } },
+          h("a", { href: `/factions#${o.slug}`, style: { "--order": BLST.ORDER[o.slug].color } },
             h("small", null, `#${o.rank} ${BLST.ORDER[o.slug].emoji}`), h("strong", null, o.total_points), h("small", null, BLST.ORDER[o.slug].name)))),
         h("h3", null, "Record participation"),
         h("form", { class: "form", onsubmit: async (ev) => {
@@ -1265,7 +1351,7 @@
         h("h3", null, `Participants (${e.participation.length})`),
         table([
           { key: "display_name", label: "Member", fmt: (r) => r.display_name || r.email },
-          { key: "order_slug", label: "Order", fmt: (r) => BLST.orderBadge(r.order_slug, { link: false }) },
+          { key: "order_slug", label: "Faction", fmt: (r) => BLST.orderBadge(r.order_slug, { link: false }) },
           { key: "points_earned", label: "Points", num: true }, { key: "placement", label: "Place", num: true },
         ], e.participation, { sortKey: "points_earned" })));
       detail.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -1276,7 +1362,7 @@
         table([
           { key: "name", label: "Event" },
           { key: "start_date", label: "Date", fmt: (e) => (e.start_date ? fmtDate(e.start_date, { month: "short", day: "numeric", year: "numeric" }) : "—") },
-          { key: "tournament_name", label: "Tournament", fmt: (e) => (e.tournament_id ? h("a", { href: `/tournament.html?id=${e.tournament_id}` }, e.tournament_name) : "—") },
+          { key: "tournament_name", label: "Tournament", fmt: (e) => (e.tournament_id ? h("a", { href: `/tournament?id=${e.tournament_id}` }, e.tournament_name) : "—") },
           { key: "participants", label: "Members", num: true }, { key: "points", label: "Points", num: true },
         ], events, { sortKey: "start_date", onRow: (e) => showEvent(e.id) })),
       detail,
@@ -1287,7 +1373,7 @@
           await fxEvents(el);
           showEvent(ev.id);
         } },
-          field("Name", input("name", { required: true, placeholder: "BLPA Summer Social" })),
+          field("Name", input("name", { required: true, placeholder: "Summer Social" })),
           field("Start", input("start_date", { type: "date" })),
           field("End", input("end_date", { type: "date" })),
           field("LeagueApps event id (optional)", input("leagueapps_event_id")),
@@ -1305,16 +1391,16 @@
       if (!textarea.value.trim()) return toast("Choose a file or paste a list first", true);
       const r = await run(() => api("POST", "/factions/members/import", { csv: textarea.value, dry_run: dryRun }));
       mount(out,
-        h("p", { class: r.invalid ? "notice" : "notice" }, `${dryRun ? "Preview: " : "Imported: "}${r.new_members} new member${r.new_members === 1 ? "" : "s"}, ${r.existing_members} already in an Order, ${r.invalid} invalid row${r.invalid === 1 ? "" : "s"}.`),
+        h("p", { class: r.invalid ? "notice" : "notice" }, `${dryRun ? "Preview: " : "Imported: "}${r.new_members} new member${r.new_members === 1 ? "" : "s"}, ${r.existing_members} already in a faction, ${r.invalid} invalid row${r.invalid === 1 ? "" : "s"}.`),
         r.errors.length ? h("ul", { class: "small" }, r.errors.slice(0, 50).map((x) => h("li", null, `Line ${x.line}: ${x.error}`))) : "",
         table([
           { key: "line", label: "Line", num: true }, { key: "email", label: "Email" }, { key: "name", label: "Name" },
-          { key: "order", label: "Order", fmt: (x) => BLST.orderBadge(x.order, { link: false }) },
+          { key: "order", label: "Faction", fmt: (x) => BLST.orderBadge(x.order, { link: false }) },
           { key: "new", label: "", fmt: (x) => (x.new ? h("span", { class: "badge good" }, "new") : x.duplicate_in_file ? h("span", { class: "badge" }, "repeated in file") : h("span", { class: "badge" }, "already a member")) },
         ], r.results, { sortKey: "line", sortDir: 1 }));
     };
     mount(el, h("div", { class: "card" }, h("h2", null, "Bulk upload members"),
-      h("p", { class: "muted small" }, "A spreadsheet saved as CSV (commas, semicolons or tabs) with an email column, and optionally a name. Everyone gets their Order; people already in an Order keep it, so uploading the same list twice changes nothing."),
+      h("p", { class: "muted small" }, "A spreadsheet saved as CSV (commas, semicolons or tabs) with an email column, and optionally a name. Everyone gets their faction; people already in a faction keep it, so uploading the same list twice changes nothing."),
       fileIn, textarea,
       h("div", { class: "row", style: { marginTop: "8px" } }, h("button", { onclick: () => send(true) }, "Preview"), h("button", { class: "primary", onclick: () => send(false) }, "Import")),
       out));

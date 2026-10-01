@@ -63,7 +63,8 @@ router.post("/auth/logout", async (req, res) => {
 // The signed-in account
 
 router.get("/account", requireAccount, async (req, res) => {
-  res.json(await accounts.accountView(req.auth.accountId));
+  const a = await accounts.accountView(req.auth.accountId);
+  res.json({ ...a, orgs: a.orgs.map((o) => ({ ...o, url: orgUrl(o.slug, req) })) });
 });
 
 /** New mobile number: confirm by email code, then a code to the new number. */
@@ -81,30 +82,40 @@ router.delete("/account", requireAccount, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
-// Admin: manage accounts
+// Organization admins: who can run this organization
 
 const admin = requireRole("admin");
-const { intParam, optEnum, optInt, optBool } = require("../lib/http");
+const { intParam, optEnum, optInt, optString: optStr } = require("../lib/http");
+const { orgUrl } = require("./platform");
 
-router.get("/admin/accounts", admin, async (_req, res) => {
-  res.json(await accounts.listAccounts());
+router.get("/admin/members", admin, async (_req, res) => {
+  res.json(await accounts.listMembers());
 });
 
-router.patch("/admin/accounts/:id", requireInteractiveAdmin, async (req, res) => {
-  const tid = optInt(req.body.tournament_id, "tournament_id", { min: 1 });
-  res.json(await accounts.updateAccount(intParam(req.params.id), {
-    role: optEnum(req.body.role, "role", ["user", "scorekeeper", "admin"]) ?? undefined,
-    tournamentId: tid,
-    disabled: optBool(req.body.disabled, "disabled"),
+/** Adds someone by email; without an account yet they're invited. */
+router.post("/admin/members", requireInteractiveAdmin, async (req, res) => {
+  const r = await accounts.addMember({
+    email: optStr(req.body.email, "email", { max: 254 }),
+    role: optEnum(req.body.role, "role", ["admin", "scorekeeper"]),
+    tournament_id: optInt(req.body.tournament_id, "tournament_id", { min: 1 }) ?? null,
+  }, { invitedBy: req.auth.accountId, orgName: req.org.name, orgUrl: orgUrl(req.org.slug, req) });
+  res.status(201).json(r);
+});
+
+router.patch("/admin/members/:accountId", requireInteractiveAdmin, async (req, res) => {
+  res.json(await accounts.updateMember(intParam(req.params.accountId, "accountId"), {
+    role: optEnum(req.body.role, "role", ["admin", "scorekeeper"]) ?? undefined,
+    tournament_id: optInt(req.body.tournament_id, "tournament_id", { min: 1 }),
   }));
 });
 
-router.post("/admin/accounts/:id/logout", requireInteractiveAdmin, async (req, res) => {
-  res.json({ ended: await accounts.endAllSessions(intParam(req.params.id)) });
+router.delete("/admin/members/:accountId", requireInteractiveAdmin, async (req, res) => {
+  await accounts.removeMember(intParam(req.params.accountId, "accountId"));
+  res.status(204).end();
 });
 
-router.delete("/admin/accounts/:id", requireInteractiveAdmin, async (req, res) => {
-  await accounts.deleteAccount(intParam(req.params.id));
+router.delete("/admin/invites/:email", requireInteractiveAdmin, async (req, res) => {
+  await accounts.removeInvite(optStr(req.params.email, "email", { max: 254 }) || "");
   res.status(204).end();
 });
 

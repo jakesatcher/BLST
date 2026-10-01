@@ -3,6 +3,7 @@ const config = require("../config");
 const db = require("../db");
 const notify = require("./notify");
 const { HttpError, badRequest } = require("../lib/http");
+const { withOrg } = require("../lib/context");
 
 // Accounts: passwordless sign-in with two factors for everyone.
 //   1. a one-time code emailed to the address (proves the email), then
@@ -262,16 +263,23 @@ async function complete(ch, { sessionId } = {}) {
       if (n > 0) throw new HttpError(409, "An admin account already exists. Sign in instead.");
       return (await c.query(
         `INSERT INTO accounts (email, phone, role) VALUES ($1, $2, 'admin')
-         ON CONFLICT (email) DO UPDATE SET role = 'admin', phone = EXCLUDED.phone, tournament_id = NULL, disabled_at = NULL
+         ON CONFLICT (email) DO UPDATE SET role = 'admin', phone = EXCLUDED.phone, disabled_at = NULL
          RETURNING *`,
         [ch.email, ch.phone],
       )).rows[0];
     });
     invalidateAdminCache();
+    // The first platform admin also runs the first organization.
+    await withOrg(1, () => db.query(
+      `INSERT INTO org_members (account_id, role) SELECT $1, 'admin'
+        WHERE NOT EXISTS (SELECT 1 FROM org_members WHERE role = 'admin') ON CONFLICT (org_id, account_id) DO UPDATE SET role = 'admin'`,
+      [acct.id],
+    )).catch(() => {});
   }
+  await claimInvites(acct);
   await db.query("UPDATE accounts SET last_login_at = now() WHERE id = $1", [acct.id]);
   const token = await createSession(acct);
-  return { step: "done", token, account: view(acct) };
+  return { step: "done", token, account: await accountView(acct.id) };
 }
 
 /** Re-sends the current step's code (new code; the old one stops working). */
@@ -291,11 +299,23 @@ function sessionHours(role) {
   return config.auth.sessionHours[role] || config.auth.sessionHours.user;
 }
 
+/**
+ * The strongest access an account has anywhere (platform admin, an admin
+ * or scorekeeper of any organization). Session limits follow it, so an
+ * organization admin gets the short admin session everywhere.
+ */
+async function strongestRole(acct) {
+  if (acct.role === "admin") return "admin";
+  const r = await withOrg("*", () => db.one(
+    "SELECT max(CASE role WHEN 'admin' THEN 2 ELSE 1 END) AS r FROM org_members WHERE account_id = $1", [acct.id]));
+  return r && r.r === 2 ? "admin" : r && r.r === 1 ? "scorekeeper" : "user";
+}
+
 async function createSession(acct) {
   const token = `${SESSION_PREFIX}${crypto.randomBytes(32).toString("base64url")}`;
   await db.query(
     "INSERT INTO auth_sessions (account_id, token_hash, expires_at) VALUES ($1, $2, now() + make_interval(hours => $3))",
-    [acct.id, sha256(token), sessionHours(acct.role)],
+    [acct.id, sha256(token), sessionHours(await strongestRole(acct))],
   );
   return token;
 }
@@ -303,9 +323,9 @@ async function createSession(acct) {
 const isSessionToken = (t) => typeof t === "string" && t.startsWith(SESSION_PREFIX);
 
 /**
- * Resolves a session token to its account. The role is read live, and the
- * session's age is checked against the *current* role, so someone promoted
- * to admin is held to the admin limit straight away.
+ * Resolves a session token to its account. Access is read live, and the
+ * session's age is checked against the *current* strongest role, so someone
+ * made an admin is held to the admin limit straight away.
  */
 async function resolveSession(token) {
   const row = await db.one(
@@ -315,9 +335,10 @@ async function resolveSession(token) {
     [sha256(token)],
   );
   if (!row) return null;
-  const maxAge = sessionHours(row.role) * 3600e3;
+  const top = await strongestRole(row);
+  const maxAge = sessionHours(top) * 3600e3;
   // Admin sessions also end after a period without use (idle timeout).
-  const idle = row.role === "admin" && Date.now() - row.last_used_at.getTime() > config.auth.adminIdleMinutes * 60e3;
+  const idle = top === "admin" && Date.now() - row.last_used_at.getTime() > config.auth.adminIdleMinutes * 60e3;
   if (row.disabled_at || idle || row.expires_at < new Date() || Date.now() - row.session_created.getTime() > maxAge) {
     db.query("DELETE FROM auth_sessions WHERE id = $1", [row.session_id]).catch(() => {});
     return null;
@@ -337,7 +358,7 @@ async function endAllSessions(accountId) {
 }
 
 // ---------------------------------------------------------------------------
-// Admin-exists cache: once an admin account exists ADMIN_TOKEN is retired.
+// Admin-exists cache: once a platform admin exists ADMIN_TOKEN is retired.
 
 let adminCache = { at: 0, exists: false };
 function invalidateAdminCache() {
@@ -350,56 +371,71 @@ async function adminAccountsExist() {
 }
 
 // ---------------------------------------------------------------------------
-// Views and administration
+// Views
 
 function view(a) {
   return {
-    id: a.id, email: a.email, phone: maskPhone(a.phone), role: a.role, tournament_id: a.tournament_id,
+    id: a.id, email: a.email, phone: maskPhone(a.phone), platform_admin: a.role === "admin",
     created_at: a.created_at, last_login_at: a.last_login_at, disabled: Boolean(a.disabled_at),
   };
 }
 
+/** The account plus the organizations it belongs to (or has asked for). */
 async function accountView(id) {
   const a = await db.one("SELECT * FROM accounts WHERE id = $1", [id]);
-  return a && view(a);
+  if (!a) return null;
+  const orgs = await withOrg("*", () => db.many(
+    `SELECT o.id, o.slug, o.name, o.status, o.factions_enabled, m.role
+       FROM org_members m JOIN organizations o ON o.id = m.org_id WHERE m.account_id = $1 ORDER BY o.name`, [id]));
+  return { ...view(a), orgs };
 }
+
+// ---------------------------------------------------------------------------
+// Platform: every account (platform admins only)
 
 async function listAccounts() {
-  const rows = await db.many(
-    `SELECT a.*, t.name AS tournament,
-            (SELECT count(*) FROM auth_sessions s WHERE s.account_id = a.id AND s.expires_at > now()) AS sessions
-       FROM accounts a LEFT JOIN tournaments t ON t.id = a.tournament_id ORDER BY a.role = 'admin' DESC, a.email`,
-  );
-  return rows.map((a) => ({ ...view(a), tournament: a.tournament, sessions: a.sessions }));
+  const rows = await withOrg("*", () => db.many(
+    `SELECT a.*,
+            (SELECT count(*) FROM auth_sessions s WHERE s.account_id = a.id AND s.expires_at > now()) AS sessions,
+            (SELECT coalesce(json_agg(json_build_object('slug', o.slug, 'name', o.name, 'role', m.role) ORDER BY o.name), '[]')
+               FROM org_members m JOIN organizations o ON o.id = m.org_id WHERE m.account_id = a.id) AS orgs
+       FROM accounts a ORDER BY a.role = 'admin' DESC, a.email`));
+  return rows.map((a) => ({ ...view(a), sessions: a.sessions, orgs: a.orgs }));
 }
 
-/** Refuses changes that would leave no active admin account. */
-async function assertNotLastAdmin(c, id) {
+/** Refuses changes that would leave no active platform admin. */
+async function assertNotLastPlatformAdmin(c, id) {
   const r = (await c.query(
     `SELECT (SELECT role = 'admin' AND disabled_at IS NULL FROM accounts WHERE id = $1) AS is_admin,
             (SELECT count(*) FROM accounts WHERE role = 'admin' AND disabled_at IS NULL) AS admins`,
     [id],
   )).rows[0];
-  if (r.is_admin && r.admins <= 1) throw new HttpError(409, "This is the only admin account. Make someone else an admin first.");
+  if (r.is_admin && r.admins <= 1) throw new HttpError(409, "This is the only platform admin. Make someone else a platform admin first.");
 }
 
-async function updateAccount(id, { role, tournamentId, disabled }) {
+/** Refuses deleting someone who is the only admin of an organization. */
+async function assertNotSoleOrgAdmin(id) {
+  const orgs = await withOrg("*", () => db.many(
+    `SELECT o.name FROM org_members m JOIN organizations o ON o.id = m.org_id
+      WHERE m.account_id = $1 AND m.role = 'admin'
+        AND (SELECT count(*) FROM org_members x WHERE x.org_id = m.org_id AND x.role = 'admin') = 1`, [id]));
+  if (orgs.length) throw new HttpError(409, `This is the only admin of ${orgs.map((o) => o.name).join(", ")}. Make someone else an admin there first.`);
+}
+
+async function updateAccount(id, { platformAdmin, disabled }) {
   const out = await db.tx(async (c) => {
     await c.query("LOCK TABLE accounts IN SHARE ROW EXCLUSIVE MODE");
     const cur = (await c.query("SELECT * FROM accounts WHERE id = $1", [id])).rows[0];
     if (!cur) throw new HttpError(404, "account not found");
-    const nextRole = role ?? cur.role;
-    if ((cur.role === "admin" && nextRole !== "admin") || disabled === true) await assertNotLastAdmin(c, id);
-    let tid = tournamentId === undefined ? cur.tournament_id : tournamentId;
-    if (nextRole !== "scorekeeper") tid = null; // only scorekeepers are limited to a tournament
-    if (tid && !(await c.query("SELECT 1 FROM tournaments WHERE id = $1", [tid])).rowCount) throw badRequest("tournament not found");
+    const nextRole = platformAdmin === undefined ? cur.role : platformAdmin ? "admin" : "user";
+    if ((cur.role === "admin" && nextRole !== "admin") || disabled === true) await assertNotLastPlatformAdmin(c, id);
     const row = (await c.query(
-      `UPDATE accounts SET role = $2, tournament_id = $3,
-              disabled_at = CASE WHEN $4::boolean IS NULL THEN disabled_at WHEN $4 THEN COALESCE(disabled_at, now()) ELSE NULL END
+      `UPDATE accounts SET role = $2,
+              disabled_at = CASE WHEN $3::boolean IS NULL THEN disabled_at WHEN $3 THEN COALESCE(disabled_at, now()) ELSE NULL END
         WHERE id = $1 RETURNING *`,
-      [id, nextRole, tid, disabled ?? null],
+      [id, nextRole, disabled ?? null],
     )).rows[0];
-    // Role changes and disabling take effect immediately: end their sessions.
+    // Platform role changes and disabling take effect immediately.
     if (disabled === true || nextRole !== cur.role) await c.query("DELETE FROM auth_sessions WHERE account_id = $1", [id]);
     return row;
   });
@@ -408,13 +444,116 @@ async function updateAccount(id, { role, tournamentId, disabled }) {
 }
 
 async function deleteAccount(id) {
+  await assertNotSoleOrgAdmin(id);
   await db.tx(async (c) => {
     await c.query("LOCK TABLE accounts IN SHARE ROW EXCLUSIVE MODE");
-    await assertNotLastAdmin(c, id);
+    await assertNotLastPlatformAdmin(c, id);
     const r = await c.query("DELETE FROM accounts WHERE id = $1", [id]);
     if (!r.rowCount) throw new HttpError(404, "account not found");
   });
   invalidateAdminCache();
+}
+
+// ---------------------------------------------------------------------------
+// Organization members (runs in the current organization's context)
+
+async function listMembers() {
+  const members = await db.many(
+    `SELECT m.account_id, m.role, m.tournament_id, m.created_at, t.name AS tournament,
+            a.email, a.phone, a.last_login_at, a.disabled_at, a.role = 'admin' AS platform_admin
+       FROM org_members m JOIN accounts a ON a.id = m.account_id LEFT JOIN tournaments t ON t.id = m.tournament_id
+      ORDER BY m.role, a.email`,
+  );
+  const invites = await db.many(
+    `SELECT i.email, i.role, i.tournament_id, i.created_at, t.name AS tournament
+       FROM org_invites i LEFT JOIN tournaments t ON t.id = i.tournament_id ORDER BY i.created_at DESC`,
+  );
+  return {
+    members: members.map(({ phone, disabled_at: d, ...m }) => ({ ...m, phone: maskPhone(phone), disabled: Boolean(d) })),
+    invites,
+  };
+}
+
+async function checkTournament(c, role, tournamentId) {
+  const tid = role === "scorekeeper" ? tournamentId ?? null : null; // only scorekeepers are limited to one
+  if (tid && !(await c.query("SELECT 1 FROM tournaments WHERE id = $1", [tid])).rowCount) throw badRequest("tournament not found");
+  return tid;
+}
+
+async function assertNotLastOrgAdmin(c, accountId) {
+  const r = (await c.query(
+    `SELECT (SELECT role FROM org_members WHERE account_id = $1) AS role,
+            (SELECT count(*) FROM org_members WHERE role = 'admin') AS admins`, [accountId])).rows[0];
+  if (r.role === "admin" && r.admins <= 1) throw new HttpError(409, "This is the organization's only admin. Make someone else an admin first.");
+}
+
+/**
+ * Gives someone access to this organization. If they have no account yet
+ * an invitation is kept, and claimed when they sign up with that email.
+ */
+async function addMember({ email: rawEmail, role, tournament_id: tournamentId }, { invitedBy, orgName, orgUrl } = {}) {
+  const email = normEmail(rawEmail);
+  if (!["admin", "scorekeeper"].includes(role)) throw badRequest("role must be admin or scorekeeper");
+  return db.tx(async (c) => {
+    const tid = await checkTournament(c, role, tournamentId);
+    const acct = (await c.query("SELECT id FROM accounts WHERE email = $1", [email])).rows[0];
+    if (acct) {
+      await c.query(
+        `INSERT INTO org_members (account_id, role, tournament_id) VALUES ($1, $2, $3)
+         ON CONFLICT (org_id, account_id) DO UPDATE SET role = EXCLUDED.role, tournament_id = EXCLUDED.tournament_id`,
+        [acct.id, role, tid],
+      );
+      return { added: true, account_id: acct.id };
+    }
+    await c.query(
+      `INSERT INTO org_invites (email, role, tournament_id, invited_by) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (org_id, email) DO UPDATE SET role = EXCLUDED.role, tournament_id = EXCLUDED.tournament_id`,
+      [email, role, tid, invitedBy || null],
+    );
+    if (orgName && orgUrl) {
+      notify.sendEmail(email, `You're invited to ${orgName} on Beer League Stats`,
+        `You've been given ${role} access to ${orgName}.\n\nCreate your account with this email address at ${orgUrl}/account#signup ` +
+        "(you'll confirm it with a code sent to this email and one texted to your phone).").catch(() => {});
+    }
+    return { invited: true };
+  });
+}
+
+async function updateMember(accountId, { role, tournament_id: tournamentId }) {
+  return db.tx(async (c) => {
+    const cur = (await c.query("SELECT * FROM org_members WHERE account_id = $1", [accountId])).rows[0];
+    if (!cur) throw new HttpError(404, "member not found");
+    const nextRole = role ?? cur.role;
+    if (!["admin", "scorekeeper"].includes(nextRole)) throw badRequest("role must be admin or scorekeeper");
+    if (cur.role === "admin" && nextRole !== "admin") await assertNotLastOrgAdmin(c, accountId);
+    const tid = await checkTournament(c, nextRole, tournamentId === undefined ? cur.tournament_id : tournamentId);
+    return (await c.query("UPDATE org_members SET role = $2, tournament_id = $3 WHERE account_id = $1 RETURNING *", [accountId, nextRole, tid])).rows[0];
+  });
+}
+
+async function removeMember(accountId) {
+  await db.tx(async (c) => {
+    await assertNotLastOrgAdmin(c, accountId);
+    const r = await c.query("DELETE FROM org_members WHERE account_id = $1", [accountId]);
+    if (!r.rowCount) throw new HttpError(404, "member not found");
+  });
+}
+
+async function removeInvite(email) {
+  const r = await db.query("DELETE FROM org_invites WHERE email = $1", [String(email).toLowerCase()]);
+  if (!r.rowCount) throw new HttpError(404, "invitation not found");
+}
+
+/** Turns invitations for this email into memberships (at every sign-in). */
+async function claimInvites(acct) {
+  return withOrg("*", async () => {
+    const r = await db.query(
+      `INSERT INTO org_members (org_id, account_id, role, tournament_id)
+       SELECT org_id, $1, role, tournament_id FROM org_invites WHERE email = $2
+       ON CONFLICT (org_id, account_id) DO NOTHING`, [acct.id, acct.email]);
+    await db.query("DELETE FROM org_invites WHERE email = $1", [acct.email]);
+    return r.rowCount;
+  });
 }
 
 /** Housekeeping: expired challenges, sessions and old send-log rows. */
@@ -428,5 +567,6 @@ module.exports = {
   normEmail, normPhone, maskEmail, maskPhone,
   startLogin, startSignup, startSetup, startPhoneChange, setupStatus, verify, resend,
   isSessionToken, resolveSession, endSession, endAllSessions, adminAccountsExist, invalidateAdminCache,
-  accountView, listAccounts, updateAccount, deleteAccount, prune, SESSION_PREFIX,
+  accountView, listAccounts, updateAccount, deleteAccount, prune, SESSION_PREFIX, strongestRole,
+  listMembers, addMember, updateMember, removeMember, removeInvite, claimInvites,
 };

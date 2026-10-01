@@ -1,12 +1,26 @@
-# BLPA Factions in BLST
+# Factions
 
-BLPA Factions (the Original Draft Society) is part of BLST: one app, one
-database, one sign-in. It was previously a separate app
-(github.com/jakesatcher/blpafactions); see "Moving from the standalone app" below.
+Factions is an optional feature of Beer League Stats. Each organization turns
+it on or off and designs its own factions; when it's on, its players compete
+for their faction as well as their team. It started as BLPA Factions (the
+Original Draft Society), a separate app (github.com/jakesatcher/blpafactions);
+see "Moving from the standalone app" below.
+
+## Turning it on
+
+**Admin → Organization → Factions**:
+- tick **On** (off hides the Factions page, menu item, badges and points for
+  everyone; nothing is deleted);
+- add factions (name, emoji, colour, up to 24), or start from a ready-made set:
+  **BLPA Orders** (the six below) or **Four colours**;
+- rename and recolour them any time. Once people are in factions they can't
+  be removed, because everyone's faction is permanent.
+
+Players with an email join a faction as soon as factions exist and it's on.
 
 ## The rules
 
-- **Six Orders:** Varghona 🐺, Tuskarium 🐘, Aetherwing 🦅, Serikon 🐍, Thalkara 🦑 and Ursonne 🐻.
+- **BLPA's six Orders:** Varghona 🐺, Tuskarium 🐘, Aetherwing 🦅, Serikon 🐍, Thalkara 🦑 and Ursonne 🐻. Other organizations have their own.
 - **Membership is automatic.** Anyone with an email is a member, and their
   Order is assigned the first time BLST sees that email. That happens through
   any of these:
@@ -18,8 +32,8 @@ database, one sign-in. It was previously a separate app
 - **An Order is for life.** It's computed from the email:
   1. take the SHA-256 of the trimmed, lowercased email;
   2. read the first 4 bytes as an unsigned big-endian integer;
-  3. take that mod 6;
-  4. use the result as a position in the fixed list above.
+  3. take that mod the number of factions;
+  4. use the result as a position in the organization's list.
 
   It is never recalculated, and the database itself refuses any change to a
   member's Order or email.
@@ -62,15 +76,16 @@ nothing is counted twice.
 ## Where things are
 
 **Public:**
-- **Factions** page (`/factions.html`): Order standings, standings by event,
+- **Factions** page (`/factions`): faction standings, standings by event,
   and top members.
-- **Home page:** an Order standings strip.
+- **Stats page:** a faction standings strip.
 - **Tournament page:** a Factions tab.
-- **Player page:** the player's Order, points, events and achievements.
+- **Player page:** the player's faction, points, events and achievements.
 
 Public pages show names and totals only, never emails.
 
 **Admin:**
+- **Admin → Organization:** on/off and the faction designer.
 - **Admin → Factions:**
   - **Overview:** standings, plus the LeagueApps member import;
   - **Members:** search, add, bonus points, achievements;
@@ -84,12 +99,16 @@ Public pages show names and totals only, never emails.
 
 ## API
 
+Every Factions route answers 404 while the organization has Factions off.
+
 **Public:**
-- `GET /api/v1/factions`: Orders, events and leaders in one call.
+- `GET /factions/definitions`: the organization's factions (slug, name, emoji, colour).
+- `GET /api/v1/factions`: faction totals, events and leaders in one call.
 - `GET /factions/orders`, `GET /factions/events`, `GET /factions/events/:id/totals`, `GET /factions/leaders?order=`.
 - `GET /tournaments/:id/factions/order-totals`.
 
 **Admin:**
+- Setup: `GET /factions-setup`; `PUT /factions-setup {enabled}`; `POST /factions-setup/factions {name, emoji, color}` or `{preset: "orders" | "colors"}`; `PATCH`/`DELETE /factions-setup/factions/:slug`.
 - Members: `GET /factions/members?q=&order=`; `POST /factions/members {email, display_name}` (find or create); `POST /factions/members/find {email}`; `GET /factions/members/:id`; `POST /factions/members/:id/points {points}`; `POST /factions/members/:id/achievements {code, title, event_id?}`.
 - Bulk upload: `POST /factions/members/import {csv, dry_run}` (or a `text/csv` body).
 - Events: `POST /factions/events`; `GET /factions/events/:id`; `POST /factions/events/:id/participation {member_id | email, points_earned, placement}`.

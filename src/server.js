@@ -5,6 +5,7 @@ const control = require("./services/gameControl");
 const webhooks = require("./services/webhooks");
 const factions = require("./services/factions");
 const leagueapps = require("./services/leagueapps");
+const { withOrg } = require("./lib/context");
 const { MIN_ADMIN_TOKEN_LENGTH } = require("./middleware/auth");
 
 // Never boot a deployed instance with its write APIs wide open. ADMIN_TOKEN
@@ -29,14 +30,14 @@ async function main() {
   if (config.deployed && config.auth.logCodes && (!notify.emailConfigured() || !notify.smsConfigured())) {
     console.warn("Email/SMS aren't fully set up: sign-in codes for those channels are written to this log. Set SMTP_URL and TWILIO_* (see docs/RAILWAY.md).");
   }
-  const pruneAuth = () => accounts.prune().catch(() => {});
+  const pruneAuth = () => withOrg("*", () => accounts.prune()).catch(() => {});
   setInterval(pruneAuth, 3600e3).unref();
   webhooks.start();
   factions.start();
   leagueapps.startSchedule();
   const rearmed = await control.rearmAll();
   // Keep the audit trail for 180 days.
-  const prune = () => db.query("DELETE FROM audit_log WHERE at < now() - interval '180 days'").catch(() => {});
+  const prune = () => withOrg("*", () => db.query("DELETE FROM audit_log WHERE at < now() - interval '180 days'")).catch(() => {});
   prune();
   setInterval(prune, 12 * 3600e3).unref();
   const app = createApp();

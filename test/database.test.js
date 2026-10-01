@@ -12,7 +12,7 @@ let db;
 let appPool;
 
 test.before(async () => {
-  ctx = await startApp();
+  ctx = await startApp({ asAppRole: false });
   db = require("../src/db");
   await db.query("DROP OWNED BY blst_app_test").catch(() => {});
   await db.query("DROP ROLE IF EXISTS blst_app_test");
@@ -35,6 +35,10 @@ test("the app role can use the data but can't change the schema or escape the da
   u.password = r.password;
   appPool = new Pool({ connectionString: u.toString(), max: 1 });
   const q = (sql, p) => appPool.query(sql, p);
+  // Without an organization the app role sees and may write nothing.
+  assert.equal((await q("SELECT count(*)::int AS n FROM tournaments")).rows[0].n, 0);
+  await assert.rejects(q("INSERT INTO tournaments (name) VALUES ('No org')"), /row-level security|null value/);
+  await q("SELECT set_config('app.org_id', '1', false)");
 
   const role = (await q("SELECT rolsuper, rolcreaterole, rolcreatedb FROM pg_roles WHERE rolname = current_user")).rows[0];
   assert.deepEqual(role, { rolsuper: false, rolcreaterole: false, rolcreatedb: false });
@@ -88,7 +92,7 @@ test("queries can't run forever, and the Order guard can't be skipped by the app
   assert.notEqual(r.rows[0].statement_timeout, "0");
   await assert.rejects(db.query("SELECT pg_sleep(30)"), /statement timeout|canceling statement/);
   await assert.rejects(
-    appPool.query("UPDATE faction_members SET order_slug = CASE WHEN order_slug = 'ursonne' THEN 'thalkara' ELSE 'ursonne' END WHERE email = 'role.test@example.com'"),
+    appPool.query("SELECT set_config('app.org_id', '1', false); UPDATE faction_members SET order_slug = CASE WHEN order_slug = 'ursonne' THEN 'thalkara' ELSE 'ursonne' END WHERE email = 'role.test@example.com'"),
     /permanent/,
   );
 });

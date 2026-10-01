@@ -59,7 +59,7 @@ router.post("/tournaments/:id/registrations/import", admin, async (req, res) => 
   if (rows.length > 5000) throw badRequest("too many rows (max 5000)");
   const dryRun = optBool(req.body.dry_run, "dry_run") || false;
   const report = { rows: rows.length, created: 0, updated: 0, returning: 0, needs_review: 0, errors: [], preview: [], dry_run: dryRun };
-  const client = await db.getPool().connect();
+  const client = await db.connect();
   try {
     await client.query("BEGIN");
     const t = (await client.query("SELECT * FROM tournaments WHERE id = $1 FOR UPDATE", [tid])).rows[0];

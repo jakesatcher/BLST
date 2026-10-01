@@ -272,7 +272,7 @@ async function lookup(code) {
       [player.id],
     ),
     db.many("SELECT season, event_name, team_name, gp, goals, assists, pim, goalie_gp, wins, losses, shutouts FROM historical_stats WHERE player_id = $1 ORDER BY season NULLS FIRST", [player.id]),
-    playerHistory(db.getPool(), player.id, reg ? reg.tournament_id : 0),
+    playerHistory(db, player.id, reg ? reg.tournament_id : 0),
   ]);
   return { registration: reg, player, registrations, historical_stats: history, summary: tournaments };
 }

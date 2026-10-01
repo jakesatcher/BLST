@@ -1,8 +1,17 @@
-# BLST: BLPA Live Scoring & Stats
+# Beer League Stats (BLST)
 
-BLST handles live scoring and stat tracking for BLPA hockey tournaments. Scorekeepers run the clock and log events from a rinkside screen. Anyone with the URL can watch scores, standings and stats update in real time. Stats can be exported to other apps, and results can be pushed to the **BLPA Factions (ODS)** app.
+Beer League Stats handles live scoring and stat tracking for beer-league hockey. Scorekeepers run the clock and log events from a rinkside screen. Anyone with the URL can watch scores, standings and stats update in real time. Stats can be exported to other apps.
 
-- **Stack:** Node 22, Express 5 and Postgres, with a plain HTML/JS front end and no build step. It deploys to Heroku the same way BLPA Factions does.
+It's one app for many leagues. Each **organization** gets its own address, and **Factions** is an optional feature that each organization's admin turns on or off:
+
+| Address | What |
+|---|---|
+| `beerleaguestats.hockey` | The platform: sign up, ask for an organization, platform admin |
+| `<org>.beerleaguestats.hockey/stats` | That organization's scores, standings and stats |
+| `<org>.beerleaguestats.hockey/factions` | Its Factions (only when it's turned on) |
+| `<org>.beerleaguestats.hockey/admin` | Its admin and setup |
+
+- **Stack:** Node 22, Express 5 and Postgres, with a plain HTML/JS front end and no build step. It deploys to Railway (or Heroku).
 - **Real time:** viewers receive updates over Server-Sent Events. The clock ticks locally in each browser from the server's state, so the server doesn't push anything every second.
 - **Stats are never stored as totals.** Every number is recomputed from the game's event log. Editing or voiding an event corrects every box score, standing, leaderboard and export on the next read.
 
@@ -10,15 +19,26 @@ BLST handles live scoring and stat tracking for BLPA hockey tournaments. Scoreke
 
 | Page | Who | What |
 |---|---|---|
-| `/` | Public | Live and upcoming games, list of tournaments |
-| `/factions.html` | Public | BLPA Factions: Order standings, standings by event, top members |
-| `/tournament.html?id=N` | Public | Scores, standings, leaders, skater and goalie stats, rosters, Factions standings when the tournament counts for Factions |
-| `/game.html?id=N` | Public | Live scoreboard (clock, score, shots on goal, power play, penalty-box countdowns), scoring summary, box score, lineups, play-by-play |
-| `/player.html?id=N` | Public | Career stats: imported history plus every BLST tournament |
-| `/account.html` | Anyone | Create an account or sign in (emailed code + texted code), change mobile number, sign out everywhere, delete account. First visit: set up the global admin |
-| `/scorekeeper.html` | Scorekeeper account or key | Clock and periods (Space starts/stops the clock), tap-a-number event entry, goalie pulls, lineup changes, edit/void/restore events |
-| `/admin.html` | Admin account | Accounts and access, BLPA Factions (members, points, achievements, events, bulk upload), tournaments and team count, teams, rosters and jersey numbers, moving players between teams, schedule and round-robin generator, roster and historical imports, API keys, webhooks |
-| `/api.html` | Anyone | API reference |
+| `/stats` | Public | Live and upcoming games, list of tournaments (`/` goes here) |
+| `/factions` | Public | Factions, when the organization uses it: faction standings, standings by event, top members |
+| `/tournament?id=N` | Public | Scores, standings, leaders, skater and goalie stats, rosters, Factions standings when the tournament counts for Factions |
+| `/game?id=N` | Public | Live scoreboard (clock, score, shots on goal, power play, penalty-box countdowns), scoring summary, box score, lineups, play-by-play |
+| `/player?id=N` | Public | Career stats: imported history plus every BLST tournament |
+| `/account` | Anyone | Create an account or sign in (emailed code + texted code), change mobile number, sign out everywhere, delete account. First visit: set up the platform admin |
+| `/scorekeeper` | Scorekeeper account or key | Clock and periods (Space starts/stops the clock), tap-a-number event entry, goalie pulls, lineup changes, edit/void/restore events |
+| `/admin` | Organization admin | **Organization** (Factions on/off, design your factions, people and invitations), Factions (members, points, achievements, events, bulk upload), tournaments and team count, teams, rosters and jersey numbers, moving players between teams, schedule and round-robin generator, roster and historical imports, API keys, webhooks |
+| `/api` | Anyone | API reference |
+
+On the platform's own address: `/` (sign in, your organizations, ask for a new one) and `/platform` (platform admins: approve, suspend and rename organizations; manage accounts).
+
+## Organizations
+
+- **Asking for one:** anyone creates an account on the platform, picks a name and an address (`metro` → `metro.beerleaguestats.hockey`) and asks. Platform admins get an email and approve or reject it at `/platform`; the person who asked gets an email and becomes the organization's admin.
+- **Separate data:** each organization has its own tournaments, teams, players, stats, API keys, webhooks, Factions and people. The database enforces it (Postgres row-level security), so a bug in one query can't show one league's data to another.
+- **People:** organization admins add people by email under **Admin → Organization → People** as *Admin* or *Scorekeeper* (optionally one tournament). Someone without an account gets an email invitation; the access applies when they sign up with that address. One account can belong to several organizations.
+- **Sign-in is per address:** signing in on the platform doesn't sign you in on `metro.beerleaguestats.hockey`; sign in there too (same account, same codes).
+- **Platform admins** (`/platform`) approve, suspend and rename organizations, and manage every account. The first account set up with the setup key is a platform admin and runs the first organization (`blpa`).
+- **One league only?** Leave `APP_DOMAIN` unset: everything runs as the `blpa` organization on whatever address the app has (`DEFAULT_ORG` picks another).
 
 ## What's tracked
 
@@ -44,6 +64,8 @@ npm run migrate
 npm run seed                  # optional demo tournament: 4 teams, 2 final games, 1 live
 npm run dev                   # http://localhost:3000
 ```
+
+Organizations work locally too: with `APP_DOMAIN=localhost`, `http://localhost:3000` is the platform and `http://blpa.localhost:3000` is the `blpa` organization (browsers send `*.localhost` to your machine).
 
 Without email and SMS providers, a local server prints sign-in codes in its log (`[dev email to …]`, `[dev sms to …]`), so you can create accounts without sending anything.
 
@@ -75,6 +97,11 @@ least-privilege database login, and prints a one-time setup key to its log.
 
 Then open the site → **Admin & setup** → **Set up the admin account** with the
 setup key.
+
+For organizations on their own addresses, add the custom domain
+`beerleaguestats.hockey` **and** the wildcard `*.beerleaguestats.hockey` to the
+service and set `APP_DOMAIN=beerleaguestats.hockey`. See
+[docs/RAILWAY.md](docs/RAILWAY.md#organizations-on-their-own-addresses).
 
 ## Deploying to Heroku (for testing)
 
@@ -115,11 +142,12 @@ The `Procfile` runs migrations in the release phase. TLS to Heroku Postgres is t
 
 ## Accounts and sign-in
 
-Everyone signs in the same way, with **two one-time codes**: one emailed to them, then one texted to their phone. There are no passwords. BLST stores only each account's **email address and mobile number** (plus its access level).
+Everyone signs in the same way, with **two one-time codes**: one emailed to them, then one texted to their phone. There are no passwords. BLST stores only each account's **email address and mobile number** (plus which organizations it belongs to).
 
-- **Standard users** create their own account at `/account.html` (**Create account**). A standard account has no staff access.
-- **Admins** give people access under **Admin → Accounts**: *Scorekeeper* (optionally limited to one tournament) or *Global admin*. Changing someone's access signs them out everywhere so it applies immediately. You can also disable, sign out or delete accounts. The last admin can't be removed.
-- **Sessions:** admins stay signed in for 12 hours, scorekeepers 24 hours, standard users 30 days. Anyone can **sign out everywhere** or **delete their account** from `/account.html`.
+- **Anyone** can create an account at `/account` (**Create account**). An account with no organization has no staff access.
+- **Organization admins** give people access under **Admin → Organization → People**: *Scorekeeper* (optionally limited to one tournament) or *Admin*. The last admin of an organization can't be removed.
+- **Platform admins** disable, sign out or delete accounts, and make other platform admins, at `/platform`. The last platform admin can't be removed.
+- **Sessions:** follow the person's strongest access anywhere: admins stay signed in for 12 hours, scorekeepers 24 hours, everyone else 30 days. Anyone can **sign out everywhere** or **delete their account** from `/account`.
 - **Lost phone (admin):** another admin can update access, or the account holder can sign in and change their number (that needs the emailed code and a code to the new number). If the only admin loses their phone, set `ADMIN_TOKEN_BREAK_GLASS=true`, sign in with `ADMIN_TOKEN` under Admin → *Use an API key instead*, fix things, then remove the flag.
 - **API keys** are still there for machines and shared rink iPads (Admin → API keys).
 
@@ -170,7 +198,7 @@ A matched registration links to the player's existing record, so their imported 
 ```bash
 openssl pkcs12 -nodes -legacy -in <client-id>.p12 -out <client-id>.pem
 ```
-Then set `LEAGUEAPPS_SITE_ID`, `LEAGUEAPPS_CLIENT_ID` and `LEAGUEAPPS_PRIVATE_KEY` (the PEM contents). It's the same key setup as BLPA Factions. To sync on a schedule, either:
+Then set `LEAGUEAPPS_SITE_ID`, `LEAGUEAPPS_CLIENT_ID` and `LEAGUEAPPS_PRIVATE_KEY` (the PEM contents). These settings belong to one organization: `LEAGUEAPPS_ORG_ID` (default `1`, the first organization) says which. To sync on a schedule, either:
 - set `LEAGUEAPPS_SYNC_INTERVAL_MIN`, or
 - add Heroku Scheduler running `npm run sync:leagueapps`.
 
@@ -243,22 +271,25 @@ CI runs the full test suite (including `test/security.test.js`) and `npm audit` 
 
 ## API
 
-Base path `/api/v1`. Reads are public, and writes need `Authorization: Bearer <key>` (an API key, or the session token from signing in). The full reference is at [`/api.html`](public/api.html). Main groups:
+Base path `/api/v1`. Reads are public, and writes need `Authorization: Bearer <key>` (an API key, or the session token from signing in). The full reference is at [`/api`](public/api.html). Main groups:
 
 - **Live data:** `/tournaments/:id/{games,standings,leaders,stats/skaters,stats/goalies,teams}`, `/games/:id` (full live snapshot), `/stream?game_id=` or `?tournament_id=` (SSE).
 - **Export API:** `/export/tournaments/:id`, `/export/tournaments/:id/{skaters,goalies,standings,games}`, `/export/games/:id`, `/export/players/:id`, `/export/players`. JSON by default; add `?format=csv` for CSV. Every payload carries a `schema_version`.
-- **Webhooks:** signed JSON POSTs for `game.final`, `game.event.created`, `roster.moved` and other events. See `/api.html#webhooks`.
+- **Webhooks:** signed JSON POSTs for `game.final`, `game.event.created`, `roster.moved` and other events. See `/api#webhooks`.
 - **Import:** `/import/historical`, `/import/roster/:tournamentId`. CSV or JSON, with `dry_run` and per-row errors.
 
 Emails and Factions player IDs (a reversible encoding of the email) are only ever returned to admins. They never appear in public pages, exports or webhooks.
 
-## BLPA Factions
+## Factions
 
-BLPA Factions (the Original Draft Society) is built in; it used to be a separate app.
-- **Membership:** every player with an email belongs to one of six Orders for
-  life, assigned from their email.
+Factions is an optional feature: each organization's admin turns it on under
+**Admin → Organization** and designs its own factions (name, emoji, colour), or
+starts from a ready-made set (BLPA's six Orders, or four colours). When it's
+off, the Factions page, menu item and badges are hidden.
+- **Membership:** every player with an email belongs to one of the
+  organization's factions for life, assigned from their email.
 - **Points:** tournaments that count for Factions earn points for each player's
-  Order automatically as games go final.
+  faction automatically as games go final.
 - **Admin:** admins award bonus points and achievements, record other events,
   and bulk-upload members.
 - **Public:** fans follow the standings on the **Factions** page, the home

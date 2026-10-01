@@ -6,6 +6,7 @@ const helmet = require("helmet");
 const config = require("./config");
 const db = require("./db");
 const { authenticate } = require("./middleware/auth");
+const { resolveOrg, requireLiveOrg } = require("./middleware/org");
 const { HttpError, pgToHttp } = require("./lib/http");
 const { rateLimit } = require("./lib/rateLimit");
 
@@ -35,6 +36,9 @@ function createApp() {
       res.redirect(308, `https://${host}${req.originalUrl}`);
     });
   }
+
+  // Which organization (from the subdomain); everything after runs as it.
+  app.use(resolveOrg);
 
   app.use(
     helmet({
@@ -98,6 +102,7 @@ function createApp() {
 
   const api = express.Router();
   api.use(auditTrail);
+  api.use(requireLiveOrg);
   api.use(rateLimit({ windowMs: 60_000, max: config.rateLimits.readsPerMinute, name: "requests" }));
   api.use(rateLimit({ windowMs: 60_000, max: config.rateLimits.writesPerMinute, name: "changes", skip: (req) => !WRITE_METHODS.has(req.method) }));
   api.use("/import", rateLimit({ windowMs: 60_000, max: config.rateLimits.importsPerMinute, name: "imports", skip: (req) => req.method !== "POST" }));
@@ -107,6 +112,13 @@ function createApp() {
     if (req.auth.role || req.get("authorization")) res.set("Cache-Control", "no-store");
     next();
   });
+  // On the platform's own address only platform and account routes exist;
+  // everything else belongs to an organization's address.
+  api.use((req, _res, next) => {
+    if (req.org || /^\/(platform|auth|account|me|org)(\/|$)/.test(req.path)) return next();
+    next(new HttpError(404, "open this from your organization's address"));
+  });
+  api.use(require("./routes/platform"));
   api.use(require("./routes/auth"));
   api.use(require("./routes/media"));
   api.use(require("./routes/streams"));
@@ -126,7 +138,21 @@ function createApp() {
     res.set("Cache-Control", "public, max-age=86400");
     res.sendFile(require.resolve("hls.js/dist/hls.min.js"));
   });
-  app.use(express.static(path.join(__dirname, "..", "public"), { extensions: ["html"], dotfiles: "ignore" }));
+  // Pages. An organization's site: /stats, /factions, /admin, … ; the bare
+  // domain: the platform (sign in, request an organization, approvals).
+  const page = (name) => path.join(__dirname, "..", "public", `${name}.html`);
+  const ORG_PAGES = /^\/(stats|factions|admin|scorekeeper|tournament|game|player|watch|overlay|api)(\.html)?\/?$|^\/index\.html$/;
+  app.use((req, res, next) => {
+    if (req.method !== "GET" && req.method !== "HEAD") return next();
+    if (req.orgMissing && (req.path === "/" || ORG_PAGES.test(req.path))) return res.status(404).type("html").send(missingOrgPage(req.orgMissing));
+    if (req.path === "/") return req.org ? res.redirect(302, "/stats") : res.sendFile(page("platform"));
+    if (!req.org && ORG_PAGES.test(req.path)) return res.redirect(302, "/");
+    if (/^\/factions(\.html)?\/?$/.test(req.path) && !req.org.factions_enabled) return res.redirect(302, "/stats");
+    if (/^\/stats\/?$/.test(req.path)) return res.sendFile(page("index"));
+    if (/^\/platform\/?$/.test(req.path)) return res.sendFile(page("platform-admin"));
+    next();
+  });
+  app.use(express.static(path.join(__dirname, "..", "public"), { extensions: ["html"], dotfiles: "ignore", index: false }));
 
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, _next) => {
@@ -162,6 +188,16 @@ function auditTrail(req, res, next) {
     ).catch((err) => console.error("audit log write failed", err.message));
   });
   next();
+}
+
+/** Small static page for an unknown or not-yet-approved organization. */
+function missingOrgPage({ slug, status }) {
+  const esc = (v) => String(v).replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+  const home = config.appDomain ? `https://${config.appDomain}/` : "/";
+  const msg = status === "pending" ? "This organization is waiting for approval." : status === "suspended" ? "This organization is suspended." : "There's no organization here.";
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(slug)} · Beer League Stats</title><link rel="icon" href="/icons/icon.svg" type="image/svg+xml"><link rel="stylesheet" href="/css/app.css"></head>
+<body><main><div class="card auth-card"><h1>${esc(slug)}</h1><p>${esc(msg)}</p><p><a class="btn primary" href="${esc(home)}">Beer League Stats home</a></p></div></main></body></html>`;
 }
 
 module.exports = { createApp };

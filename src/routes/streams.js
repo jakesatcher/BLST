@@ -35,7 +35,7 @@ router.put("/tournaments/:id/streams", admin, async (req, res) => {
   const delay = optInt(req.body.delay_sec, "delay_sec", { min: 0, max: 300 }) ?? (livebarn && !embed ? 20 : 0);
   const row = await db.one(
     `INSERT INTO venue_streams (tournament_id, venue, livebarn_url, embed_url, delay_sec) VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT (tournament_id, lower(venue)) DO UPDATE
+     ON CONFLICT (org_id, tournament_id, lower(venue)) DO UPDATE
        SET venue = EXCLUDED.venue, livebarn_url = EXCLUDED.livebarn_url, embed_url = EXCLUDED.embed_url, delay_sec = EXCLUDED.delay_sec
      RETURNING *`,
     [tid, venue, livebarn, embed, delay],

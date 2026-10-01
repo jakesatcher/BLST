@@ -50,9 +50,14 @@ function settings() {
   };
 }
 
+// The LeagueApps credentials are server settings, so they belong to one
+// organization (LEAGUEAPPS_ORG_ID, default 1 = BLPA). Other organizations
+// see LeagueApps as not connected.
+const LA_ORG_ID = Number(process.env.LEAGUEAPPS_ORG_ID || 1);
+
 function isConfigured() {
   const s = settings();
-  return Boolean(s.siteId && s.clientId && s.privateKey);
+  return Boolean(s.siteId && s.clientId && s.privateKey) && require("../lib/context").currentOrg() === LA_ORG_ID;
 }
 
 const b64url = (buf) => Buffer.from(buf).toString("base64url");
@@ -200,7 +205,7 @@ async function loadCursor() {
  */
 async function sync({ fromScratch = false } = {}) {
   if (!isConfigured()) throw new HttpError(503, "LeagueApps isn't configured (set LEAGUEAPPS_SITE_ID, LEAGUEAPPS_CLIENT_ID, LEAGUEAPPS_PRIVATE_KEY)");
-  const client = await db.getPool().connect();
+  const client = await db.connect();
   const lockKey = 4815162342;
   try {
     const locked = (await client.query("SELECT pg_try_advisory_lock($1) AS ok", [lockKey])).rows[0].ok;
@@ -220,7 +225,7 @@ async function sync({ fromScratch = false } = {}) {
         if (r.program_id != null) {
           await db.query(
             `INSERT INTO leagueapps_programs (program_id, name, registrations, last_seen_at) VALUES ($1, $2, 1, now())
-             ON CONFLICT (program_id) DO UPDATE SET name = COALESCE(EXCLUDED.name, leagueapps_programs.name),
+             ON CONFLICT (org_id, program_id) DO UPDATE SET name = COALESCE(EXCLUDED.name, leagueapps_programs.name),
                registrations = leagueapps_programs.registrations + 1, last_seen_at = now()`,
             [String(r.program_id), r.program_name ? String(r.program_name).slice(0, 200) : null],
           );
@@ -253,13 +258,13 @@ async function sync({ fromScratch = false } = {}) {
       summary.cursor = cursor;
       await db.query(
         `INSERT INTO sync_state (source, last_updated, last_id, last_run_at) VALUES ($1, $2, $3, now())
-         ON CONFLICT (source) DO UPDATE SET last_updated = $2, last_id = $3, last_run_at = now()`,
+         ON CONFLICT (org_id, source) DO UPDATE SET last_updated = $2, last_id = $3, last_run_at = now()`,
         [SOURCE, cursor.lastUpdated, cursor.lastId],
       );
     }
     await db.query(
       `INSERT INTO sync_state (source, last_updated, last_id, last_run_at, last_result) VALUES ($1, $2, $3, now(), $4)
-       ON CONFLICT (source) DO UPDATE SET last_run_at = now(), last_result = $4`,
+       ON CONFLICT (org_id, source) DO UPDATE SET last_run_at = now(), last_result = $4`,
       [SOURCE, summary.cursor.lastUpdated, summary.cursor.lastId, JSON.stringify(summary)],
     );
     if (summary.created || summary.updated) emitDomain("registrations.synced", { created: summary.created, updated: summary.updated });
@@ -282,7 +287,7 @@ const MEMBERS_SOURCE = "leagueapps-members-2";
 async function syncMembers({ fromScratch = false } = {}) {
   if (!isConfigured()) throw new HttpError(503, "LeagueApps isn't configured (set LEAGUEAPPS_SITE_ID, LEAGUEAPPS_CLIENT_ID, LEAGUEAPPS_PRIVATE_KEY)");
   const factions = require("./factions");
-  const client = await db.getPool().connect();
+  const client = await db.connect();
   const lockKey = 4815162343;
   try {
     const locked = (await client.query("SELECT pg_try_advisory_lock($1) AS ok", [lockKey])).rows[0].ok;
@@ -318,13 +323,13 @@ async function syncMembers({ fromScratch = false } = {}) {
       summary.cursor = cursor;
       await db.query(
         `INSERT INTO sync_state (source, last_updated, last_id, last_run_at) VALUES ($1, $2, $3, now())
-         ON CONFLICT (source) DO UPDATE SET last_updated = $2, last_id = $3, last_run_at = now()`,
+         ON CONFLICT (org_id, source) DO UPDATE SET last_updated = $2, last_id = $3, last_run_at = now()`,
         [MEMBERS_SOURCE, cursor.lastUpdated, cursor.lastId],
       );
     }
     await db.query(
       `INSERT INTO sync_state (source, last_updated, last_id, last_run_at, last_result) VALUES ($1, $2, $3, now(), $4)
-       ON CONFLICT (source) DO UPDATE SET last_run_at = now(), last_result = $4`,
+       ON CONFLICT (org_id, source) DO UPDATE SET last_run_at = now(), last_result = $4`,
       [MEMBERS_SOURCE, summary.cursor.lastUpdated, summary.cursor.lastId, JSON.stringify(summary)],
     );
     if (summary.new_members) emitDomain("factions.updated", { imported: summary.new_members });
@@ -388,14 +393,15 @@ async function status() {
 let timer = null;
 function startSchedule(log = console) {
   const minutes = Number(process.env.LEAGUEAPPS_SYNC_INTERVAL_MIN || 0);
-  if (!minutes || !isConfigured() || timer) return;
-  timer = setInterval(() => {
+  if (!minutes || !require("../lib/context").withOrg(LA_ORG_ID, isConfigured) || timer) return;
+  const { withOrg } = require("../lib/context");
+  timer = setInterval(() => withOrg(LA_ORG_ID, () => {
     sync().then((s) => s.created + s.updated && log.log(`LeagueApps sync: ${s.created} new, ${s.updated} updated`))
       .catch((err) => err.status !== 409 && log.error("LeagueApps sync failed:", err.message))
       .then(() => syncMembers())
       .then((s) => s && s.new_members && log.log(`LeagueApps members: ${s.new_members} new Factions members`))
       .catch((err) => err.status !== 409 && log.error("LeagueApps member import failed:", err.message));
-  }, Math.max(5, minutes) * 60000);
+  }), Math.max(5, minutes) * 60000);
   timer.unref();
 }
 

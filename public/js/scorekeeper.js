@@ -39,7 +39,7 @@
   async function renderPicker() {
     // A key limited to one tournament only sees that tournament's games.
     const games = (await get("/games")).filter((g) => !me.tournament_id || g.tournament_id === me.tournament_id);
-    const card = (g) => h("a", { class: "card", href: `/scorekeeper.html?game=${g.id}` },
+    const card = (g) => h("a", { class: "card", href: `/scorekeeper?game=${g.id}` },
       h("div", { class: "row between" }, statusBadge(g), h("span", { class: "muted small" }, fmtDate(g.scheduled_at))),
       h("div", { class: "teams", style: { marginTop: "8px" } }, BLST.gameTeamMark(g, "away"), g.away_team, g.status !== "scheduled" ? ` ${g.away_score}` : ""),
       h("div", { class: "teams" }, BLST.gameTeamMark(g, "home"), g.home_team, g.status !== "scheduled" ? ` ${g.home_score}` : ""),
@@ -168,9 +168,9 @@
 
     mount(clockCard,
       h("div", { class: "row between small", style: { marginBottom: "6px" } },
-        h("a", { href: "/scorekeeper.html" }, "← Games"),
+        h("a", { href: "/scorekeeper" }, "← Games"),
         h("span", { class: "muted" }, snap.tournament.name),
-        h("span", { class: "row" }, pill, h("a", { href: `/game.html?id=${gameId}`, target: "_blank" }, "Public view ↗"))),
+        h("span", { class: "row" }, pill, h("a", { href: `/game?id=${gameId}`, target: "_blank" }, "Public view ↗"))),
       h("div", { class: "sk-score" },
         sideBox("away"),
         h("div", { class: "mid" },

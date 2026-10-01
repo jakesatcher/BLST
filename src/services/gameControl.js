@@ -29,7 +29,7 @@ async function publish(gameId, reason) {
       gameId, snapshot.home.score, snapshot.away.score,
     ]);
   }
-  bus.emit("game", { gameId, tournamentId: game.tournament_id, reason, snapshot });
+  bus.emit("game", { gameId, tournamentId: game.tournament_id, orgId: game.org_id, reason, snapshot });
   return snapshot;
 }
 
@@ -71,8 +71,10 @@ async function expire(gameId, startedAt) {
 }
 
 async function rearmAll() {
-  const running = await db.many("SELECT * FROM games WHERE clock_running");
-  running.forEach(arm);
+  const { withOrg } = require("../lib/context");
+  const running = await withOrg("*", () => db.many("SELECT * FROM games WHERE clock_running"));
+  // Each clock (and everything its expiry does) runs as its organization.
+  for (const g of running) withOrg(g.org_id, () => arm(g));
   return running.length;
 }
 

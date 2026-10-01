@@ -88,8 +88,39 @@ Once those are set, codes are sent and never logged. Without the CLI, write
 
 Optional:
 - LeagueApps variables (see the README), which also import every LeagueApps
-  member into their Factions Order;
-- a custom domain under Settings → Networking.
+  member into their faction (they belong to one organization:
+  `LEAGUEAPPS_ORG_ID`, default the first);
+- your own domain, with an address per organization (next section).
+
+## Organizations on their own addresses
+
+One `blst` service serves every organization. The bare domain is the platform
+(sign up, ask for an organization, approvals) and each organization lives at
+`<org>.<domain>`, with `/stats`, `/factions` and `/admin` pages.
+
+1. In the service's **Settings → Networking → Custom Domain**, add
+   `beerleaguestats.hockey` **and** `*.beerleaguestats.hockey`.
+2. At your DNS provider, add exactly the records Railway shows for each: a
+   CNAME for the bare domain (or ALIAS/ANAME/flattened CNAME, which most DNS
+   providers offer at the root), a CNAME for `*`, the `_acme-challenge` CNAME
+   that lets Railway issue the wildcard certificate, and the TXT verification
+   records. If you use Cloudflare, set the records to **DNS only** (grey
+   cloud) until the certificates are issued.
+3. Set the variable:
+   ```bash
+   railway variable set --service blst APP_DOMAIN=beerleaguestats.hockey
+   ```
+
+Then:
+- `https://beerleaguestats.hockey` is the platform. Sign in there with the
+  admin account you set up and open **Platform admin** to approve organizations.
+- Your first organization is `blpa`: `https://blpa.beerleaguestats.hockey/stats`.
+  Rename it or change its address under Platform admin.
+- New organizations ask at the platform; you get an email for each one.
+- Railway's own `*.up.railway.app` address shows the platform. Set
+  `DEFAULT_ORG=blpa` to make it show an organization instead.
+
+Leave `APP_DOMAIN` unset to run a single league on any address.
 
 Admin → **Security** shows the live security posture. It should be all ✓ once
 email and SMS are set up.
@@ -128,3 +159,5 @@ Your existing `ADMIN_TOKEN` and `AUTH_SECRET` keep working, so leave them.
   needs an admin, and the only way to create the first admin is the setup key
   from the log plus email and text codes.
 - **Keep `blst` at one replica:** live scores are shared in memory.
+- **Sign-in is per address:** browsers keep the sign-in for each organization's
+  address separately, so people sign in on each one they use.

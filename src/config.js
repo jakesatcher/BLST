@@ -39,6 +39,11 @@ module.exports = {
   // (tests, on-prem). Off by default to prevent SSRF.
   allowPrivateUrls: bool(process.env.ALLOW_PRIVATE_NETWORK_URLS, false),
   securityContact: process.env.SECURITY_CONTACT || "",
+  // Organizations live at <slug>.<APP_DOMAIN> (e.g. blpa.beerleaguestats.hockey);
+  // the bare domain is the platform. Without APP_DOMAIN every host serves
+  // DEFAULT_ORG, which is how a single-league install keeps working.
+  appDomain: (process.env.APP_DOMAIN || "").toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, ""),
+  defaultOrg: process.env.DEFAULT_ORG !== undefined ? process.env.DEFAULT_ORG.toLowerCase() : process.env.APP_DOMAIN ? "" : "blpa",
   auth: {
     // Keys the one-time-code hashes. Without the config var the server
     // generates one on first boot and keeps it in the database

@@ -136,7 +136,13 @@ async function main() {
   console.log(`Seeded "${t.name}" (tournament ${t.id}): 4 teams, ${n} players, ${games.length} games (2 final, 1 live).`);
 }
 
-main()
+// Demo data goes to SEED_ORG (default: the first organization, BLPA).
+const { withOrg } = require("../lib/context");
+withOrg("*", async () => {
+  await db.migrate({ log: () => {} });
+  return db.one("SELECT id FROM organizations WHERE slug = $1", [process.env.SEED_ORG || "blpa"]);
+})
+  .then((org) => (org ? withOrg(org.id, main) : main()))
   .catch((err) => {
     console.error(err);
     process.exitCode = 1;
