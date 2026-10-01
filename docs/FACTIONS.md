@@ -1,44 +1,133 @@
-# BLPA Factions integration
+# BLPA Factions in BLST
 
-BLST talks to the BLPA Factions (Original Draft Society) API using only endpoints that exist in `jakesatcher/blpafactions`. No changes to Factions are required.
+BLPA Factions (the Original Draft Society) is part of BLST: one app, one
+database, one sign-in. It was previously a separate app
+(github.com/jakesatcher/blpafactions); see "Moving from the standalone app" below.
 
-## Setup
+## The rules
 
-| Env var | Value |
+- **Six Orders:** Varghona 🐺, Tuskarium 🐘, Aetherwing 🦅, Serikon 🐍, Thalkara 🦑 and Ursonne 🐻.
+- **Membership is automatic.** Anyone with an email is a member, and their
+  Order is assigned the first time BLST sees that email. That happens through
+  any of these:
+  - a roster upload or registration;
+  - the LeagueApps sync;
+  - adding a player with an email;
+  - an admin adding the person by hand;
+  - a bulk upload.
+- **An Order is for life.** It's computed from the email:
+  1. take the SHA-256 of the trimmed, lowercased email;
+  2. read the first 4 bytes as an unsigned big-endian integer;
+  3. take that mod 6;
+  4. use the result as a position in the fixed list above.
+
+  It is never recalculated, and the database itself refuses any change to a
+  member's Order or email.
+- **Member id:** the base64url of the email, so it can be turned back into
+  the email. It's treated like the email: admins only, and never logged.
+- The formulas match the standalone app exactly, so ids and Orders carry over.
+
+## Points
+
+An Order's total is the sum of its members' points. Each member's total is:
+- **Event points:** one entry per event. Tournaments that count for Factions
+  create these automatically.
+- **Bonus points:** manual awards, which can be negative.
+
+**Tournament points** are per player, using the tournament's point values (the
+defaults are shown; change them per tournament):
+
+| | |
 |---|---|
-| `FACTIONS_BASE_URL` | Your deployed Factions app, e.g. `https://blpa-ods.herokuapp.com` |
-| `FACTIONS_ADMIN_TOKEN` | The Factions app's `ADMIN_TOKEN`, sent as `x-admin-token` |
-| `FACTIONS_AUTO_SYNC` | `true` to push results automatically whenever a game in a linked tournament goes final or is reopened |
+| game played | 1 |
+| goal | 2 |
+| assist | 1 |
+| win | 1 |
+| shutout | 3 |
+| hat trick | 2 |
+| champion | 5 |
+| runner-up | 3 |
 
-Admin → **BLPA Factions** shows whether Factions is configured and reachable, plus recent sync activity.
+Hat tricks, shutouts and titles also become **achievements**. A title comes from
+a team's final place, or from the standings until final places are set.
 
-## Mapping
+Points update by themselves **every time a game goes final** in a tournament
+that counts. To turn that off, set `FACTIONS_AUTO_AWARD=false`, then use
+**Recalculate & award now** instead.
 
-| BLST | Factions call | Notes |
-|---|---|---|
-| Tournament | `POST /events {name, startDate, endDate}` | You can also link an existing event ID. The ID is stored in `tournaments.factions_event_id`. |
-| Player (with email) | `POST /players {email, displayName}` | Factions derives the player ID and Order from the email. BLST stores the returned `id` (private) and `orderSlug` (shown publicly). Players with no email are skipped. |
-| Player's tournament | `POST /events/:eventId/participation {playerId, pointsEarned, placement}` | An **upsert**, so pushing again after a stat correction replaces the old value rather than adding to it. |
-| Hat trick / shutout / champion | `POST /players/:playerId/achievements {code, title, eventId}` | Codes are stable (`blst:t<tid>:g<gid>:hat-trick`, `blst:t<tid>:g<gid>:shutout`, `blst:t<tid>:champion`), so re-sending is a no-op. |
-| Order standings tab | `GET /events/:eventId/order-totals` | Proxied at the public `GET /api/v1/tournaments/:id/factions/order-totals`. |
+Awarding is idempotent. Re-running it after a stat correction replaces that
+tournament's points and withdraws achievements that are no longer earned, so
+nothing is counted twice.
 
-BLST never calls `POST /players/:id/points`. That endpoint increments a running total, so a retried or corrected push would double count. Tournament points go through the participation upsert instead.
+## Where things are
 
-## Points formula
+**Public:**
+- **Factions** page (`/factions.html`): Order standings, standings by event,
+  and top members.
+- **Home page:** an Order standings strip.
+- **Tournament page:** a Factions tab.
+- **Player page:** the player's Order, points, events and achievements.
 
-Each player's `pointsEarned` is:
+Public pages show names and totals only, never emails.
 
+**Admin:**
+- **Admin → Factions:**
+  - **Overview:** standings, plus the LeagueApps member import;
+  - **Members:** search, add, bonus points, achievements;
+  - **Events:** events that aren't tournaments, and recording participation by hand;
+  - **Bulk upload:** a CSV with an email column and optional name; preview first.
+- **Admin → Tournaments → (tournament) → Factions:**
+  - *Count this tournament for Factions*;
+  - point values;
+  - a preview of points per player;
+  - *Recalculate & award now*.
+
+## API
+
+**Public:**
+- `GET /api/v1/factions`: Orders, events and leaders in one call.
+- `GET /factions/orders`, `GET /factions/events`, `GET /factions/events/:id/totals`, `GET /factions/leaders?order=`.
+- `GET /tournaments/:id/factions/order-totals`.
+
+**Admin:**
+- Members: `GET /factions/members?q=&order=`; `POST /factions/members {email, display_name}` (find or create); `POST /factions/members/find {email}`; `GET /factions/members/:id`; `POST /factions/members/:id/points {points}`; `POST /factions/members/:id/achievements {code, title, event_id?}`.
+- Bulk upload: `POST /factions/members/import {csv, dry_run}` (or a `text/csv` body).
+- Events: `POST /factions/events`; `GET /factions/events/:id`; `POST /factions/events/:id/participation {member_id | email, points_earned, placement}`.
+- Tournaments: `POST`/`DELETE /tournaments/:id/factions/link`; `GET /tournaments/:id/factions/preview`; `POST /tournaments/:id/factions/award`.
+- LeagueApps: `POST /integrations/leagueapps/members/sync` (also runs with the scheduled sync and `npm run sync:leagueapps`).
+
+## Moving from the standalone app
+
+The import copies:
+- members, with their original Orders;
+- bonus points;
+- events, keeping their ids, so tournaments already linked stay linked;
+- participation and achievements.
+
+It's safe to run again. If BLST had already given someone an Order, the
+standalone app's Order wins and the report lists any such cases. There should be
+none, since both apps use the same formula.
+
+**Deployed with BLST's earlier side-by-side Railway setup?** Nothing to do. The
+standalone app kept its tables in the `factions` schema of the shared database,
+and BLST imports them by itself, once, the first time it starts after this
+update (look for `Factions import:` in the logs). Set `FACTIONS_AUTO_IMPORT=false`
+to skip that.
+
+**Anywhere else:** run the import with the old database's URL, from any machine
+that can reach it:
+
+```bash
+npm run factions:import -- "postgresql://user:pass@host:5432/db?sslmode=require"
 ```
-game_played × GP + goal × G + assist × A + win × (wins while dressed)
-+ shutout × SO + hat_trick × (hat tricks) + champion (if placement 1) or runner_up (if placement 2)
-```
 
-The defaults are `1 / 2 / 1 / 1 / 3 / 2 / 5 / 3`. You can change them per tournament under Tournaments → Factions sync, or with `PATCH /tournaments/:id {"factions_points": {...}}`. **Placement** is the team's *Final place* when you've set it (after playoffs). Otherwise it's the team's rank in the standings.
+`DATABASE_URL` must point at BLST's database.
 
-Only final games count toward points. **Preview** shows every player's computed line before anything is sent.
+**Afterwards:**
+1. Delete the old `factions` service or app.
+2. Delete BLST's `FACTIONS_BASE_URL`, `FACTIONS_ADMIN_TOKEN` and `FACTIONS_AUTO_SYNC`
+   variables. They aren't used any more.
 
-## Workflow
-
-1. Link the tournament (Create event in Factions, or Link existing).
-2. Sync players. Make sure the roster has emails; roster import accepts an `email` column.
-3. Play games. With auto-sync on, results push after every final. Otherwise use **Push to Factions** whenever you like, as often as you like.
+One deliberate difference: the standalone app's all-time Order totals counted
+only manual points. Here, event points count too, so tournaments show up in the
+all-time standings.

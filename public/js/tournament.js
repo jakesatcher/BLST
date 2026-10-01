@@ -9,7 +9,7 @@
   document.title = `${t.name} · BLST`;
   const view = h("div");
   const names = [["scores", "Scores"], ["standings", "Standings"], ["leaders", "Leaders"], ["skaters", "Skaters"], ["goalies", "Goalies"], ["teams", "Teams"]];
-  if (t.factions_event_id) names.push(["orders", "Orders"]);
+  if (t.factions_event_id) names.push(["orders", "Factions"]);
   const tabBar = tabs(names, (tab) => { history.replaceState(null, "", `?id=${id}#${tab}`); show(tab); }, location.hash.slice(1) || "scores");
 
   mount(
@@ -114,7 +114,7 @@
               { key: "jersey_number", label: "#", num: true },
               { key: "last_name", label: "Player", fmt: (r) => h("a", { href: `/player.html?id=${r.id}` }, `${r.first_name} ${r.last_name}`, r.role ? ` (${r.role})` : "") },
               { key: "position", label: "Pos" },
-              ...(t.factions_event_id ? [{ key: "factions_order", label: "Order" }] : []),
+              ...(team.roster.some((r) => r.factions_order) ? [{ key: "factions_order", label: "Order", fmt: (r) => BLST.orderBadge(r.factions_order) }] : []),
               ...(team.roster.some((r) => r.draft_round != null || r.draft_pick != null)
                 ? [{ key: "draft_pick", label: "Drafted", num: true, fmt: (r) => draftLabel(r) }] : []),
             ],
@@ -125,11 +125,20 @@
     if (tab === "orders") {
       try {
         const totals = await get(`/tournaments/${id}/factions/order-totals`);
-        return mount(view, h("div", { class: "card" }, h("h2", null, "BLPA Order standings for this event"), table(
-          [{ key: "name", label: "Order", fmt: (r) => r.name || r.slug }, { key: "animal", label: "" }, { key: "totalPoints", label: "Points", num: true }, { key: "playerCount", label: "Players", num: true }],
-          totals, { sortKey: "totalPoints" })));
+        const max = Math.max(1, ...totals.map((r) => r.total_points));
+        return mount(view, h("div", { class: "card" },
+          h("div", { class: "row between" }, h("h2", { style: { margin: 0 } }, "Faction standings for this tournament"), h("a", { href: "/factions.html" }, "All-time standings →")),
+          h("p", { class: "muted small" }, "Points from this tournament's games, titles and awards, by Order. Updated as games go final."),
+          h("div", { class: "order-grid" }, [...totals].sort((a, b) => a.rank - b.rank).map((r) => {
+            const o = BLST.ORDER[r.slug];
+            return h("div", { class: `order-card${r.rank === 1 && r.total_points > 0 ? " leader" : ""}`, style: { "--order": o.color } },
+              h("span", { class: "rank" }, `#${r.rank}`), h("div", { class: "emoji", "aria-hidden": "true" }, o.emoji), h("h3", null, o.name),
+              h("div", { class: "muted small" }, `${r.members} player${r.members === 1 ? "" : "s"}`),
+              h("div", { class: "pts" }, r.total_points.toLocaleString(), h("span", { class: "muted small", style: { fontWeight: 400 } }, " pts")),
+              h("div", { class: "bar" }, h("span", { style: { width: `${Math.round((100 * r.total_points) / max)}%` } })));
+          }))));
       } catch (err) {
-        return mount(view, h("p", { class: "notice error" }, `Order standings unavailable: ${err.message}`));
+        return mount(view, h("p", { class: "notice error" }, `Faction standings unavailable: ${err.message}`));
       }
     }
   }

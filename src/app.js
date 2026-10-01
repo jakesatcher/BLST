@@ -67,6 +67,7 @@ function createApp() {
   const big = { limit: "10mb" };
   app.use("/api/v1/import", express.json(big), express.text({ type: ["text/csv", "text/plain"], ...big }));
   app.use(/^\/api\/v1\/tournaments\/\d+\/registrations\/import$/, express.json(big), express.text({ type: ["text/csv", "text/plain"], ...big }));
+  app.use("/api/v1/factions/members/import", express.json(big), express.text({ type: ["text/csv", "text/plain"], ...big }));
   app.use(express.json({ limit: "1mb" }));
   app.use(express.text({ type: ["text/csv", "text/plain"], limit: "1mb" }));
   // A raw CSV body is accepted anywhere JSON { csv } is.
@@ -104,6 +105,7 @@ function createApp() {
   api.use(require("./routes/stream"));
   api.use(require("./routes/importExport"));
   api.use(require("./routes/registrations"));
+  api.use(require("./routes/factions"));
   api.use(require("./routes/admin"));
   api.use((_req, _res, next) => next(new HttpError(404, "not found")));
   app.use("/api/v1", api);
@@ -133,15 +135,18 @@ function createApp() {
  * (401/403/429), with who made it. Paths only: no query strings, bodies
  * or tokens are recorded.
  */
+// Factions member ids are a reversible encoding of an email: never log them.
+const loggedPath = (req) => `${req.baseUrl}${req.path}`.replace(/(\/factions\/members\/)(?!find$|import$)[^/]+/, "$1:id").slice(0, 300);
+
 function auditTrail(req, res, next) {
   res.on("finish", () => {
     const rejected = [401, 403, 429].includes(res.statusCode);
     if (!WRITE_METHODS.has(req.method) && !rejected) return;
     const a = req.auth || {};
-    if (rejected) console.warn(`[security] ${res.statusCode} ${req.method} ${req.baseUrl}${req.path} ip=${req.ip} actor=${a.actor || a.via || "anonymous"}`);
+    if (rejected) console.warn(`[security] ${res.statusCode} ${req.method} ${loggedPath(req)} ip=${req.ip} actor=${a.actor || a.via || "anonymous"}`);
     db.query(
       "INSERT INTO audit_log (actor, role, key_id, method, path, status, ip, user_agent) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
-      [a.actor || a.via || "anonymous", a.role || null, a.keyId || null, req.method, `${req.baseUrl}${req.path}`.slice(0, 300),
+      [a.actor || a.via || "anonymous", a.role || null, a.keyId || null, req.method, loggedPath(req),
         res.statusCode, req.ip, (req.get("user-agent") || "").slice(0, 200)],
     ).catch((err) => console.error("audit log write failed", err.message));
   });

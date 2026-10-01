@@ -91,7 +91,7 @@
   // Shell
 
   const view = h("div");
-  const mainTabs = tabs([["tournaments", "Tournaments"], ["players", "Players"], ["history", "Historical import"], ["accounts", "Accounts"], ["keys", "API keys"], ["webhooks", "Webhooks"], ["factions", "BLPA Factions"], ["security", "Security"]],
+  const mainTabs = tabs([["tournaments", "Tournaments"], ["players", "Players"], ["history", "Historical import"], ["accounts", "Accounts"], ["keys", "API keys"], ["webhooks", "Webhooks"], ["factions", "Factions"], ["security", "Security"]],
     (t) => { history.replaceState(null, "", `#${t}`); show(t); }, location.hash.slice(1).split("/")[0] || "tournaments", { size: "big" });
   mount(app,
     h("div", { class: "row between" }, h("h1", null, "Admin"),
@@ -124,7 +124,7 @@
     if (!selectedTid) return mount(body, newTournamentForm());
     const t = await get(`/tournaments/${selectedTid}`);
     const sub = h("div");
-    const subTabs = tabs([["registrations", "Registrations"], ["teams", "Teams & rosters"], ["schedule", "Schedule"], ["import", "Draft / roster upload"], ["streams", "Streams"], ["moves", "Moves"], ["settings", "Settings"], ["factions", "Factions sync"]],
+    const subTabs = tabs([["registrations", "Registrations"], ["teams", "Teams & rosters"], ["schedule", "Schedule"], ["import", "Draft / roster upload"], ["streams", "Streams"], ["moves", "Moves"], ["settings", "Settings"], ["factions", "Factions"]],
       (s) => tournamentSub(s, t, sub), "teams", { size: "medium" });
     const checklist = h("div");
     mount(body, checklist, subTabs.el, sub);
@@ -141,6 +141,7 @@
       ["Put players on every team: upload the draft results CSV", t.teams.length > 0 && t.teams.every((x) => x.player_count > 0), "Upload rosters", () => subTabs.set("import")],
       ["Schedule games", games.length > 0, "Schedule", () => subTabs.set("schedule")],
       ["Create a scorekeeper key for each rink device", keys.some((k) => k.role === "scorekeeper" && !k.revoked_at), "API keys", () => mainTabs.set("keys")],
+      ["Count it for BLPA Factions, so games earn points for each player's Order", Boolean(t.factions_event_id), "Factions", () => subTabs.set("factions")],
       ["Score a game", games.some((g) => g.status !== "scheduled"), "Open scorekeeper", () => (location.href = "/scorekeeper.html")],
     ];
     const done = steps.filter((x) => x[1]).length;
@@ -351,7 +352,7 @@
     } },
       field("First name", input("first_name", { required: true })),
       field("Last name", input("last_name", { required: true })),
-      field("Email (for Factions)", input("email", { type: "email" })),
+      field("Email (gives them their Factions Order)", input("email", { type: "email" })),
       field("Shoots", select("shoots", [["", "—"], "L", "R"], "")),
       h("div", null, h("button", { class: "primary" }, "Create & add")));
 
@@ -807,59 +808,66 @@
   }
 
   async function factionsView(t, el) {
-    const status = await get("/factions/status");
+    const [status, roster] = await Promise.all([get("/factions/status"), get(`/tournaments/${t.id}/teams`)]);
+    const players = roster.flatMap((team) => team.roster);
+    const noEmail = players.filter((p) => !p.factions_order);
     const out = h("div");
     const refresh = async () => tournamentSub("factions", await get(`/tournaments/${t.id}`), el);
+    const counts = Boolean(t.factions_event_id);
     const pts = { ...status.default_points, ...(t.factions_points || {}) };
     const ptsForm = h("form", { class: "form", onsubmit: async (e) => {
       e.preventDefault();
       await run(() => api("PATCH", `/tournaments/${t.id}`, { factions_points: values(e.target) }), "Point values saved");
       refresh();
-    } }, Object.entries(pts).map(([k, v]) => field(k.replace(/_/g, " "), input(k, { type: "number", value: v, step: 1 }))), h("div", null, h("button", null, "Save points")));
+    } }, Object.entries(pts).map(([k, v]) => field(k.replace(/_/g, " "), input(k, { type: "number", value: v, step: 1 }))), h("div", null, h("button", null, "Save point values")));
 
     const showPreview = async () => {
       const p = await get(`/tournaments/${t.id}/factions/preview`);
-      mount(out, h("h3", null, "Points preview"), table([
-        { key: "name", label: "Player" }, { key: "gp", label: "GP", num: true }, { key: "goals", label: "G", num: true }, { key: "assists", label: "A", num: true },
-        { key: "wins", label: "W", num: true }, { key: "shutouts", label: "SO", num: true }, { key: "hat_tricks", label: "Hat tricks", num: true },
-        { key: "placement", label: "Place", num: true }, { key: "points_earned", label: "Points", num: true },
-        { key: "factions_player_id", label: "Synced", fmt: (r) => (r.factions_player_id ? "✓" : h("span", { class: "muted" }, "no email / not synced")) },
+      mount(out, h("h3", null, "Points per player"), table([
+        { key: "name", label: "Player" },
+        { key: "order", label: "Order", fmt: (r) => (r.order ? BLST.orderBadge(r.order, { link: false }) : h("span", { class: "muted small" }, "no email")) },
+        { key: "gp", label: "GP", num: true }, { key: "goals", label: "G", num: true }, { key: "assists", label: "A", num: true },
+        { key: "wins", label: "W", num: true }, { key: "shutouts", label: "SO", num: true }, { key: "placement", label: "Place", num: true },
+        { key: "points_earned", label: "Points", num: true },
         { key: "ach", label: "Achievements", sort: false, fmt: (r) => r.achievements.map((a) => a.title.split(" — ")[0]).join(", ") },
       ], p.participation, { sortKey: "points_earned" }));
     };
 
     mount(el,
-      !status.configured ? h("p", { class: "notice error" }, "FACTIONS_BASE_URL isn't set on the server, so nothing can be sent yet. See the BLPA Factions tab.") : "",
-      h("div", { class: "card" }, h("h2", null, "1. Link to a Factions event"),
-        t.factions_event_id ? h("p", null, "Linked to Factions event ", h("code", null, t.factions_event_id)) : h("p", { class: "muted" }, "Not linked yet."),
+      h("div", { class: "card" },
+        h("div", { class: "row between" },
+          h("h2", { style: { margin: 0 } }, "BLPA Factions"),
+          counts ? h("span", { class: "badge good" }, "Counts for Factions") : h("span", { class: "badge" }, "Not counting")),
+        h("p", { class: "muted" }, counts
+          ? `Games in this tournament earn points for each player's Order${status.auto_award ? ", updated every time a game goes final" : ""}. Fans see the result on the tournament's Factions tab and the Factions page.`
+          : "Turn this on and every game here earns Factions points for the players' Orders: games played, goals, assists, wins, shutouts, hat tricks and the title."),
         h("div", { class: "row" },
-          h("button", { class: "primary", disabled: !status.configured, onclick: async () => { await run(() => api("POST", `/tournaments/${t.id}/factions/link`, {}), "Event created in Factions"); refresh(); } },
-            t.factions_event_id ? "Create a new event instead" : "Create event in Factions"),
-          h("span", { class: "muted" }, "or"),
-          h("input", { id: "fx-event", placeholder: "existing event id", value: "" }),
-          h("button", { disabled: !status.configured, onclick: async () => {
-            const id = $("#fx-event").value.trim();
-            if (!id) return;
-            await run(() => api("POST", `/tournaments/${t.id}/factions/link`, { event_id: id }), "Linked");
-            refresh();
-          } }, "Link existing"))),
-      h("div", { class: "card" }, h("h2", null, "2. Sync players"),
-        h("p", { class: "muted small" }, "Registers each rostered player with Factions by email and records their Order. Players without an email are skipped."),
-        h("button", { disabled: !status.configured, onclick: async () => {
-          const r = await run(() => api("POST", `/tournaments/${t.id}/factions/sync-players`));
-          toast(`${r.synced} synced, ${r.skipped_no_email.length} without email, ${r.errors.length} errors`, r.errors.length > 0);
-          showPreview();
-        } }, "Sync players")),
-      h("div", { class: "card" }, h("h2", null, "3. Points & push"),
-        h("p", { class: "muted small" }, "Points per player are sent as the event participation's pointsEarned (an upsert, so pushing again after a correction replaces the old value). Hat tricks, shutouts and championships are also sent as achievements. Set each team's final place on the Teams tab after playoffs."),
+          counts
+            ? [h("a", { class: "btn", href: `/tournament.html?id=${t.id}#orders`, target: "_blank" }, "See standings ↗"),
+              h("button", { class: "danger", onclick: async () => {
+                if (!(await confirmSheet("Stop counting this tournament? Points already awarded stay in Factions.", { title: "Stop counting", confirmLabel: "Stop counting" }))) return;
+                await run(() => api("DELETE", `/tournaments/${t.id}/factions/link`), "Stopped counting");
+                refresh();
+              } }, "Stop counting")]
+            : h("button", { class: "primary", onclick: async () => {
+              await run(() => api("POST", `/tournaments/${t.id}/factions/link`, {}), "Counting for Factions");
+              await api("POST", `/tournaments/${t.id}/factions/award`).catch(() => {});
+              refresh();
+            } }, "Count this tournament for Factions")),
+        noEmail.length
+          ? h("p", { class: "notice small", style: { marginTop: "10px" } }, `${noEmail.length} rostered player${noEmail.length === 1 ? " has" : "s have"} no email, so no Order and no points: `,
+            noEmail.slice(0, 8).map((p) => `${p.first_name} ${p.last_name}`).join(", "), noEmail.length > 8 ? "…" : "", ". Add emails under Teams & rosters or with the roster upload.")
+          : players.length ? h("p", { class: "muted small", style: { marginTop: "10px" } }, `All ${players.length} rostered players have an Order.`) : ""),
+      h("div", { class: "card" }, h("h2", null, "Point values"),
+        h("p", { class: "muted small" }, "Per player. After playoffs, set each team's final place on Teams & rosters so the champion and runner-up bonuses apply. Hat tricks, shutouts and titles also become achievements."),
         ptsForm,
         h("div", { class: "row", style: { marginTop: "10px" } },
-          h("button", { onclick: showPreview }, "Preview"),
-          h("button", { class: "primary", disabled: !status.configured || !t.factions_event_id, onclick: async () => {
-            const r = await run(() => api("POST", `/tournaments/${t.id}/factions/push`));
-            toast(`Pushed ${r.pushed} players, ${r.achievements} achievements${r.skipped_unsynced ? `, ${r.skipped_unsynced} not synced` : ""}`, r.errors.length > 0);
-          } }, "Push to Factions"),
-          status.auto_sync ? h("span", { class: "badge" }, "auto-push on every final") : ""),
+          h("button", { onclick: showPreview }, "Preview points"),
+          counts ? h("button", { class: "primary", onclick: async () => {
+            const r = await run(() => api("POST", `/tournaments/${t.id}/factions/award`));
+            toast(`Awarded ${r.points} points to ${r.awarded} member${r.awarded === 1 ? "" : "s"}${r.skipped_no_email.length ? ` (${r.skipped_no_email.length} without email skipped)` : ""}`);
+            showPreview();
+          } }, "Recalculate & award now") : ""),
         out));
   }
 
@@ -876,7 +884,7 @@
         { key: "id", label: "ID", num: true },
         { key: "last_name", label: "Name", fmt: (p) => `${p.first_name} ${p.last_name}` },
         { key: "email", label: "Email" }, { key: "position", label: "Pos" }, { key: "preferred_number", label: "#", num: true },
-        { key: "external_id", label: "External ID" }, { key: "factions_order", label: "Order" },
+        { key: "external_id", label: "External ID" }, { key: "factions_order", label: "Order", fmt: (p) => BLST.orderBadge(p.factions_order, { link: false }) },
       ], list, { sortKey: "last_name", sortDir: 1, onRow: (p) => editPlayer(p.id) }));
     };
     search.addEventListener("input", debounce(load, 250));
@@ -886,7 +894,7 @@
       const hist = await get(`/players/${id}/history`);
       mount(editor, h("div", { class: "card" },
         h("div", { class: "row between" }, h("h2", null, `${p.first_name} ${p.last_name}`), h("a", { href: `/player.html?id=${id}`, target: "_blank" }, "Public page ↗")),
-        p.factions_player_id ? h("p", { class: "muted small" }, `Factions: ${p.factions_order || "?"} (synced)`) : "",
+        p.factions_order ? h("p", { class: "small" }, "Factions: ", BLST.orderBadge(p.factions_order), " (from their email; for life)") : h("p", { class: "muted small" }, "No Factions Order until they have an email."),
         h("form", { class: "form", onsubmit: async (e) => {
           e.preventDefault();
           await run(() => api("PATCH", `/players/${id}`, values(e.target, { blankAsNull: true })), "Saved");
@@ -1111,22 +1119,207 @@
   // Factions (global)
 
   async function factionsGlobalView() {
-    const s = await get("/factions/status");
-    mount(view, h("div", { class: "card" }, h("h2", null, "BLPA Factions connection"),
-      h("dl", { class: "kv" },
-        h("dt", null, "Configured"), h("dd", null, s.configured ? "yes" : "no — set FACTIONS_BASE_URL"),
-        h("dt", null, "Base URL"), h("dd", null, s.base_url || "—"),
-        h("dt", null, "Admin token"), h("dd", null, s.has_token ? "set" : "not set (FACTIONS_ADMIN_TOKEN)"),
-        h("dt", null, "Reachable"), h("dd", null, s.reachable == null ? "—" : s.reachable ? "yes" : "no"),
-        h("dt", null, "Auto-push on final"), h("dd", null, s.auto_sync ? "on" : "off (FACTIONS_AUTO_SYNC)")),
-      h("p", { class: "muted small", style: { marginTop: "12px" } }, "Connection settings are server environment variables. Per-tournament linking, player sync and pushing live under Tournaments → Factions sync."),
-      h("h3", null, "Recent sync activity"),
-      table([
-        { key: "created_at", label: "When", fmt: (r) => fmtDate(r.created_at) }, { key: "tournament_id", label: "Tournament", num: true },
-        { key: "action", label: "Action" }, { key: "ok", label: "OK", fmt: (r) => (r.ok ? "✓" : "✗") },
-        { key: "detail", label: "Detail", sort: false, fmt: (r) => h("code", { class: "small" }, JSON.stringify(r.detail).slice(0, 160)) },
-      ], s.recent, { sortKey: "created_at" })));
+    const sub = h("div");
+    const subTabs = tabs([["overview", "Overview"], ["members", "Members"], ["events", "Events"], ["upload", "Bulk upload"]],
+      (s) => factionsSub(s, sub), "overview", { size: "medium" });
+    mount(view, subTabs.el, sub);
+    factionsSub("overview", sub);
   }
+
+  function factionsSub(tab, el) {
+    mount(el, h("p", { class: "muted" }, "Loading…"));
+    const fn = { overview: fxOverview, members: fxMembers, events: fxEvents, upload: fxUpload }[tab];
+    fn(el).catch((err) => mount(el, h("p", { class: "notice error" }, err.message)));
+  }
+
+  async function fxOverview(el) {
+    const [s, orders, la] = await Promise.all([get("/factions/status"), get("/factions/orders"), get("/integrations/leagueapps").catch(() => null)]);
+    mount(el,
+      h("div", { class: "card" },
+        h("div", { class: "row between" }, h("h2", { style: { margin: 0 } }, "Order standings"), h("a", { href: "/factions.html", target: "_blank" }, "Public Factions page ↗")),
+        table([
+          { key: "rank", label: "#", num: true },
+          { key: "slug", label: "Order", fmt: (r) => BLST.orderBadge(r.slug, { link: false }) },
+          { key: "members", label: "Members", num: true },
+          { key: "event_points", label: "Event pts", num: true },
+          { key: "bonus_points", label: "Bonus pts", num: true },
+          { key: "total_points", label: "Total", num: true },
+        ], orders, { sortKey: "total_points" })),
+      h("div", { class: "card" }, h("h2", null, "How Factions works here"),
+        h("ul", { class: "stack", style: { paddingLeft: "18px" } },
+          h("li", null, "Every player with an email belongs to an Order for life, assigned from their email the first time BLST sees it. ", h("strong", null, `${s.members} members`), " so far."),
+          h("li", null, "Tournaments you mark ", h("em", null, "Count for Factions"), " (Tournaments → Factions) earn points automatically ", s.auto_award ? "as games go final." : "when you press Award (automatic awarding is off: FACTIONS_AUTO_AWARD=false)."),
+          h("li", null, "Award bonus points and achievements to anyone under Members; record other events under Events."),
+          s.players_without_email ? h("li", null, `${s.players_without_email} players have no email yet, so they have no Order.`) : ""),
+        la && la.configured ? h("div", { class: "row", style: { marginTop: "8px" } },
+          h("button", { onclick: async () => {
+            const r = await run(() => api("POST", "/integrations/leagueapps/members/sync", {}));
+            toast(`LeagueApps: ${r.new_members} new members, ${r.existing_members} already in an Order`);
+            fxOverview(el);
+          } }, "Import LeagueApps members"),
+          h("span", { class: "muted small" }, la.members?.last_run_at ? `Last run ${fmtDate(la.members.last_run_at)}` : "Gives every LeagueApps member their Order, even before they register.")) : ""));
+  }
+
+  async function fxMembers(el) {
+    const listBox = h("div");
+    const detail = h("div");
+    const q = h("input", { placeholder: "Search name or email…", style: { minWidth: "240px" }, oninput: debounce(() => load(), 250) });
+    const orderSel = select("order", [["", "All Orders"], ...BLST.ORDERS.map((o) => [o.slug, `${o.emoji} ${o.name}`])], "", { onchange: () => load() });
+    const load = async () => {
+      const params = new URLSearchParams({ limit: "200" });
+      if (q.value.trim()) params.set("q", q.value.trim());
+      if (orderSel.value) params.set("order", orderSel.value);
+      const r = await get(`/factions/members?${params}`);
+      mount(listBox,
+        h("p", { class: "muted small" }, `${r.total} member${r.total === 1 ? "" : "s"}${r.total > r.members.length ? ` (showing ${r.members.length})` : ""}. Tap one to award points.`),
+        table([
+          { key: "display_name", label: "Name", fmt: (m) => m.display_name || h("span", { class: "muted" }, "—") },
+          { key: "email", label: "Email" },
+          { key: "order_slug", label: "Order", fmt: (m) => BLST.orderBadge(m.order_slug, { link: false }) },
+          { key: "total_points", label: "Points", num: true },
+          { key: "events", label: "Events", num: true },
+          { key: "achievements_count", label: "Awards", num: true },
+        ], r.members, { sortKey: "total_points", onRow: (m) => showMember(m.id) }));
+    };
+    const showMember = async (id) => {
+      const m = await get(`/factions/members/${encodeURIComponent(id)}`);
+      const events = await get("/factions/events");
+      mount(detail, h("div", { class: "card", style: { borderTop: `6px solid ${BLST.ORDER[m.order_slug].color}` } },
+        h("div", { class: "row between" },
+          h("div", null, h("h2", { style: { margin: 0 } }, m.display_name || m.email), h("div", { class: "muted small" }, m.email)),
+          BLST.orderBadge(m.order_slug, { big: true })),
+        h("dl", { class: "kv", style: { marginTop: "10px" } },
+          h("dt", null, "Total"), h("dd", null, `${m.total_points} pts (${m.event_points} from events, ${m.bonus_points} bonus)`),
+          h("dt", null, "BLST player"), h("dd", null, m.player ? h("a", { href: `/player.html?id=${m.player.id}` }, m.player.name) : "—"),
+          h("dt", null, "Member since"), h("dd", null, fmtDate(m.created_at, { month: "short", day: "numeric", year: "numeric" })),
+          m.leagueapps_user_id ? [h("dt", null, "LeagueApps id"), h("dd", null, m.leagueapps_user_id)] : ""),
+        h("p", { class: "muted small" }, "An Order is for life: it can't be changed."),
+        h("div", { class: "grid two" },
+          h("form", { class: "stack", onsubmit: async (e) => {
+            e.preventDefault();
+            await run(() => api("POST", `/factions/members/${encodeURIComponent(id)}/points`, { points: Number(e.target.points.value) }), "Points updated");
+            showMember(id);
+            load();
+          } }, h("h3", null, "Bonus points"),
+            field("Points (negative takes away)", input("points", { type: "number", step: 1, required: true })),
+            h("button", { class: "primary" }, "Add points")),
+          h("form", { class: "stack", onsubmit: async (e) => {
+            e.preventDefault();
+            const v = values(e.target);
+            const r = await run(() => api("POST", `/factions/members/${encodeURIComponent(id)}/achievements`, v));
+            toast(r.created ? "Achievement awarded" : "They already have that achievement");
+            showMember(id);
+          } }, h("h3", null, "Achievement"),
+            field("Code (unique per member)", input("code", { required: true, placeholder: "first_event", pattern: "[A-Za-z0-9_.:\\-]+" })),
+            field("Title", input("title", { required: true, placeholder: "Played First Event" })),
+            field("Event (optional)", select("event_id", [["", "—"], ...events.map((e) => [e.id, e.name])], "")),
+            h("button", null, "Award"))),
+        m.achievements.length ? [h("h3", null, "Achievements"), h("ul", null, m.achievements.map((a) =>
+          h("li", null, `🏅 ${a.title}`, h("span", { class: "muted small" }, ` · ${a.code}${a.event_name ? ` · ${a.event_name}` : ""} · ${fmtDate(a.awarded_at, { month: "short", day: "numeric", year: "numeric" })}`))))] : "",
+        m.participation.length ? [h("h3", null, "Events"), table([
+          { key: "event_name", label: "Event" }, { key: "points_earned", label: "Points", num: true }, { key: "placement", label: "Place", num: true },
+        ], m.participation)] : ""));
+      detail.scrollIntoView({ behavior: "smooth", block: "start" });
+    };
+    mount(el,
+      h("div", { class: "card" }, h("h2", null, "Find or add a member"),
+        h("form", { class: "form", onsubmit: async (e) => {
+          e.preventDefault();
+          const r = await run(() => api("POST", "/factions/members", values(e.target)));
+          toast(r.created ? `New member: ${BLST.ORDER[r.order_slug].name}` : `Already a member of ${BLST.ORDER[r.order_slug].name}`);
+          e.target.reset();
+          load();
+          showMember(r.id);
+        } },
+          field("Email", input("email", { type: "email", required: true, placeholder: "player@example.com" })),
+          field("Name", input("display_name", { placeholder: "Jane Doe" })),
+          h("div", null, h("button", { class: "primary" }, "Find / add")))),
+      detail,
+      h("div", { class: "card" }, h("div", { class: "row" }, q, orderSel), listBox));
+    load();
+  }
+
+  async function fxEvents(el) {
+    const events = await get("/factions/events");
+    const detail = h("div");
+    const showEvent = async (id) => {
+      const [e, totals] = await Promise.all([get(`/factions/events/${encodeURIComponent(id)}`), get(`/factions/events/${encodeURIComponent(id)}/totals`)]);
+      mount(detail, h("div", { class: "card" },
+        h("h2", null, e.name),
+        e.tournament_id ? h("p", { class: "muted small" }, "Points for this event come from the tournament ", h("a", { href: `/tournament.html?id=${e.tournament_id}` }, e.tournament_name),
+          ". Recording someone here by hand is kept until the tournament is awarded again.") : "",
+        h("div", { class: "order-strip" }, [...totals].sort((a, b) => a.rank - b.rank).map((o) =>
+          h("a", { href: `/factions.html#${o.slug}`, style: { "--order": BLST.ORDER[o.slug].color } },
+            h("small", null, `#${o.rank} ${BLST.ORDER[o.slug].emoji}`), h("strong", null, o.total_points), h("small", null, BLST.ORDER[o.slug].name)))),
+        h("h3", null, "Record participation"),
+        h("form", { class: "form", onsubmit: async (ev) => {
+          ev.preventDefault();
+          const v = values(ev.target);
+          await run(() => api("POST", `/factions/events/${encodeURIComponent(id)}/participation`, v), "Recorded");
+          showEvent(id);
+        } },
+          field("Member email", input("email", { type: "email", required: true })),
+          field("Points", input("points_earned", { type: "number", step: 1, value: 0, required: true })),
+          field("Placement", input("placement", { type: "number", min: 1, step: 1 })),
+          h("div", null, h("button", { class: "primary" }, "Record"))),
+        h("h3", null, `Participants (${e.participation.length})`),
+        table([
+          { key: "display_name", label: "Member", fmt: (r) => r.display_name || r.email },
+          { key: "order_slug", label: "Order", fmt: (r) => BLST.orderBadge(r.order_slug, { link: false }) },
+          { key: "points_earned", label: "Points", num: true }, { key: "placement", label: "Place", num: true },
+        ], e.participation, { sortKey: "points_earned" })));
+      detail.scrollIntoView({ behavior: "smooth", block: "start" });
+    };
+    mount(el,
+      h("div", { class: "card" }, h("h2", null, "Events"),
+        h("p", { class: "muted small" }, "Tournaments that count for Factions appear here automatically. Add other events (socials, camps, tryouts) to give their points too."),
+        table([
+          { key: "name", label: "Event" },
+          { key: "start_date", label: "Date", fmt: (e) => (e.start_date ? fmtDate(e.start_date, { month: "short", day: "numeric", year: "numeric" }) : "—") },
+          { key: "tournament_name", label: "Tournament", fmt: (e) => (e.tournament_id ? h("a", { href: `/tournament.html?id=${e.tournament_id}` }, e.tournament_name) : "—") },
+          { key: "participants", label: "Members", num: true }, { key: "points", label: "Points", num: true },
+        ], events, { sortKey: "start_date", onRow: (e) => showEvent(e.id) })),
+      detail,
+      h("div", { class: "card" }, h("h2", null, "New event"),
+        h("form", { class: "form", onsubmit: async (e) => {
+          e.preventDefault();
+          const ev = await run(() => api("POST", "/factions/events", values(e.target)), "Event created");
+          await fxEvents(el);
+          showEvent(ev.id);
+        } },
+          field("Name", input("name", { required: true, placeholder: "BLPA Summer Social" })),
+          field("Start", input("start_date", { type: "date" })),
+          field("End", input("end_date", { type: "date" })),
+          field("LeagueApps event id (optional)", input("leagueapps_event_id")),
+          h("div", null, h("button", { class: "primary" }, "Create event")))));
+  }
+
+  async function fxUpload(el) {
+    const textarea = h("textarea", { rows: 8, style: { width: "100%" }, placeholder: "email,name\njane@example.com,Jane Doe" });
+    const fileIn = h("input", { type: "file", accept: ".csv,.tsv,.txt,text/csv", onchange: async (e) => {
+      const f = e.target.files[0];
+      if (f) textarea.value = await f.text();
+    } });
+    const out = h("div");
+    const send = async (dryRun) => {
+      if (!textarea.value.trim()) return toast("Choose a file or paste a list first", true);
+      const r = await run(() => api("POST", "/factions/members/import", { csv: textarea.value, dry_run: dryRun }));
+      mount(out,
+        h("p", { class: r.invalid ? "notice" : "notice" }, `${dryRun ? "Preview: " : "Imported: "}${r.new_members} new member${r.new_members === 1 ? "" : "s"}, ${r.existing_members} already in an Order, ${r.invalid} invalid row${r.invalid === 1 ? "" : "s"}.`),
+        r.errors.length ? h("ul", { class: "small" }, r.errors.slice(0, 50).map((x) => h("li", null, `Line ${x.line}: ${x.error}`))) : "",
+        table([
+          { key: "line", label: "Line", num: true }, { key: "email", label: "Email" }, { key: "name", label: "Name" },
+          { key: "order", label: "Order", fmt: (x) => BLST.orderBadge(x.order, { link: false }) },
+          { key: "new", label: "", fmt: (x) => (x.new ? h("span", { class: "badge good" }, "new") : x.duplicate_in_file ? h("span", { class: "badge" }, "repeated in file") : h("span", { class: "badge" }, "already a member")) },
+        ], r.results, { sortKey: "line", sortDir: 1 }));
+    };
+    mount(el, h("div", { class: "card" }, h("h2", null, "Bulk upload members"),
+      h("p", { class: "muted small" }, "A spreadsheet saved as CSV (commas, semicolons or tabs) with an email column, and optionally a name. Everyone gets their Order; people already in an Order keep it, so uploading the same list twice changes nothing."),
+      fileIn, textarea,
+      h("div", { class: "row", style: { marginTop: "8px" } }, h("button", { onclick: () => send(true) }, "Preview"), h("button", { class: "primary", onclick: () => send(false) }, "Import")),
+      out));
+  }
+
 
   // -------------------------------------------------------------------------
   // Security

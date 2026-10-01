@@ -173,6 +173,11 @@ router.post("/integrations/leagueapps/sync", admin, async (req, res) => {
   res.json(await leagueapps.sync({ fromScratch: optBool(req.body.from_scratch, "from_scratch") || false }));
 });
 
+/** Factions: every LeagueApps member with an email gets their Order. */
+router.post("/integrations/leagueapps/members/sync", admin, async (req, res) => {
+  res.json(await leagueapps.syncMembers({ fromScratch: optBool(req.body.from_scratch, "from_scratch") || false }));
+});
+
 router.get("/integrations/leagueapps/preview", admin, async (_req, res) => {
   res.json(await leagueapps.preview());
 });

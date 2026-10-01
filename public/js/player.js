@@ -1,10 +1,11 @@
 (async function () {
-  const { h, mount, get, $, param, topbar, table, fmtPct, fmtSec } = BLST;
+  const { h, mount, get, $, param, topbar, table, fmtPct, fmtSec, fmtDate, orderBadge } = BLST;
   $("#top").replaceWith(topbar("index"));
   const app = $("#app");
   const id = Number(param("id"));
   if (!id) return mount(app, h("p", { class: "notice error" }, "Missing player id"));
-  const c = await get(`/players/${id}/career`);
+  const [c, full] = await Promise.all([get(`/players/${id}/career`), get(`/players/${id}`)]);
+  const f = full.factions;
   const p = c.player;
   document.title = `${p.first_name} ${p.last_name} · BLST`;
   const isGoalie = p.position === "G" || c.career.goalie.gp > 0;
@@ -23,8 +24,18 @@
   const sk = c.career.skater;
   const gl = c.career.goalie;
   mount(app,
-    h("h1", null, `${p.first_name} ${p.last_name}`),
-    h("p", { class: "muted" }, [p.position, p.shoots ? `Shoots ${p.shoots}` : null, p.factions_order ? `Order: ${p.factions_order}` : null].filter(Boolean).join(" · ")),
+    h("div", { class: "row", style: { gap: "12px" } }, h("h1", { style: { margin: 0 } }, `${p.first_name} ${p.last_name}`), p.factions_order ? orderBadge(p.factions_order, { big: true }) : ""),
+    h("p", { class: "muted" }, [p.position, p.shoots ? `Shoots ${p.shoots}` : null].filter(Boolean).join(" · ")),
+    f ? h("div", { class: "card", style: { borderTop: `6px solid ${BLST.ORDER[f.order_slug]?.color || "var(--border)"}` } },
+      h("div", { class: "row between" },
+        h("h3", { style: { margin: 0 } }, "BLPA Factions"),
+        h("strong", { style: { fontSize: "1.4rem" } }, `${f.total_points.toLocaleString()} pts`)),
+      h("p", { class: "muted small" }, `For ${BLST.ORDER[f.order_slug]?.name || f.order_slug}: ${f.event_points} from events${f.bonus_points ? `, ${f.bonus_points} bonus` : ""}.`),
+      f.events.length ? h("ul", { class: "stack", style: { paddingLeft: "18px" } }, f.events.map((e) =>
+        h("li", null, e.tournament_id ? h("a", { href: `/tournament.html?id=${e.tournament_id}` }, e.event) : e.event,
+          `: ${e.points} pts${e.placement ? ` · placed ${e.placement}` : ""}`))) : "",
+      f.achievements.length ? [h("h4", null, "Achievements"), h("div", { class: "row" }, f.achievements.map((a) =>
+        h("span", { class: "badge good", title: `${a.event ? `${a.event} · ` : ""}${fmtDate(a.awarded_at, { month: "short", day: "numeric", year: "numeric" })}` }, `🏅 ${a.title}`)))] : "") : "",
     h("div", { class: "grid three" },
       h("div", { class: "card" }, h("h3", null, "Career (skater)"), h("dl", { class: "kv" },
         h("dt", null, "GP"), h("dd", null, sk.gp), h("dt", null, "Goals"), h("dd", null, sk.goals), h("dt", null, "Assists"), h("dd", null, sk.assists),

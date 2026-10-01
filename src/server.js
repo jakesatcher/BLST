@@ -16,6 +16,8 @@ if (config.deployed && config.adminToken && config.adminToken.length < MIN_ADMIN
 
 async function main() {
   await db.migrate();
+  // Earlier side-by-side deploys kept Factions in this database's "factions" schema.
+  await require("./services/factionsImport").autoImportSharedSchema().catch((err) => console.error("Factions auto-import failed:", err.message));
   const accounts = require("./services/accounts");
   if (config.deployed && !config.adminToken && (await accounts.setupStatus()).needed) {
     throw new Error("ADMIN_TOKEN must be set before deploying, to create the first admin account (Heroku: heroku config:set ADMIN_TOKEN=...; Railway: railway variable set ADMIN_TOKEN=...)");

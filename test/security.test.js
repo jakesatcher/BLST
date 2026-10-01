@@ -47,7 +47,7 @@ test.after(async () => {
 });
 
 test("API5 / A01: every write route rejects anonymous callers", async () => {
-  const modules = ["auth", "media", "streams", "tournaments", "players", "games", "importExport", "registrations", "admin"];
+  const modules = ["auth", "media", "streams", "tournaments", "players", "games", "importExport", "registrations", "factions", "admin"];
   const checked = [];
   for (const m of modules) {
     const router = require(`../src/routes/${m}`);
@@ -65,7 +65,7 @@ test("API5 / A01: every write route rejects anonymous callers", async () => {
   }
   assert.ok(checked.length > 40, `swept ${checked.length} write routes`);
 
-  for (const path of ["/account", "/admin/accounts", "/admin/api-keys", "/admin/webhooks", "/admin/audit-log", "/admin/security", "/import/batches",
+  for (const path of ["/account", "/admin/accounts", "/factions/members", "/factions/status", "/factions/events/x", "/admin/api-keys", "/admin/webhooks", "/admin/audit-log", "/admin/security", "/import/batches",
     `/tournaments/${S["Scope A"].tid}/roster.csv`, `/tournaments/${S["Scope A"].tid}/factions/preview`, `/games/${S["Scope A"].gid}/events/raw`]) {
     assert.equal((await call("GET", path, { ip: "198.51.100.201" })).status, 401, `GET ${path} must be private`);
   }

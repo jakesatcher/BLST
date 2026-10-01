@@ -72,7 +72,23 @@ router.get("/players/:id", async (req, res) => {
       WHERE re.player_id = $1 ORDER BY t.start_date DESC NULLS LAST`,
     [id],
   );
-  res.json({ ...serialize(player, req), rosters });
+  // Factions standing: Order, points and awards (no email or member id).
+  const factions = player.factions_player_id
+    ? await db.one(
+      `SELECT m.order_slug, m.bonus_points, COALESCE(ep.points, 0)::int AS event_points, m.bonus_points + COALESCE(ep.points, 0)::int AS total_points,
+              COALESCE((SELECT json_agg(json_build_object('title', a.title, 'awarded_at', a.awarded_at, 'event', e.name) ORDER BY a.awarded_at DESC)
+                          FROM faction_achievements a LEFT JOIN faction_events e ON e.id = a.event_id WHERE a.member_id = m.id), '[]') AS achievements,
+              COALESCE((SELECT json_agg(json_build_object('event', e.name, 'tournament_id', t.id, 'points', fp.points_earned, 'placement', fp.placement)
+                                        ORDER BY e.start_date DESC NULLS LAST)
+                          FROM faction_participation fp JOIN faction_events e ON e.id = fp.event_id
+                          LEFT JOIN tournaments t ON t.factions_event_id = e.id WHERE fp.member_id = m.id), '[]') AS events
+         FROM faction_members m
+         LEFT JOIN (SELECT member_id, sum(points_earned) AS points FROM faction_participation GROUP BY member_id) ep ON ep.member_id = m.id
+        WHERE m.id = $1`,
+      [player.factions_player_id],
+    )
+    : null;
+  res.json({ ...serialize(player, req), rosters, factions });
 });
 
 router.get("/players/:id/career", async (req, res) => {

@@ -53,7 +53,12 @@
         if (v === undefined || v === null || v === false) continue;
         if (k.startsWith("on") && typeof v === "function") el.addEventListener(k.slice(2), v);
         else if (k === "class") el.className = v;
-        else if (k === "style" && typeof v === "object") Object.assign(el.style, v);
+        else if (k === "style" && typeof v === "object") {
+          for (const [prop, val] of Object.entries(v)) {
+            if (prop.startsWith("--")) el.style.setProperty(prop, val);
+            else el.style[prop] = val;
+          }
+        }
         else if (k === "value") el.value = v;
         else if (v === true) el.setAttribute(k, "");
         else el.setAttribute(k, v);
@@ -232,6 +237,7 @@
     scorekeeper: ["M12 21a8 8 0 1 0 0-16 8 8 0 0 0 0 16z", "M12 9v4l2.5 2", "M9.5 2.5h5", "M12 2.5V5"],
     admin: ["M4 6h10", "M18 6h2", "M4 12h4", "M12 12h8", "M4 18h12", "M20 18h0", "M16 4v4", "M10 10v4", "M18 16v4"],
     docs: ["M8 7l-5 5 5 5", "M16 7l5 5-5 5", "M13.5 5l-3 14"],
+    factions: ["M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6z", "M12 8v8", "M8.5 11.5h7"],
   };
   function icon(name) {
     const NS = "http://www.w3.org/2000/svg";
@@ -250,6 +256,7 @@
   function topbar(active) {
     const links = [
       ["index", "/", "Scores", "Scores"],
+      ["factions", "/factions.html", "Factions", "Factions"],
       ["scorekeeper", "/scorekeeper.html", "Scorekeeper", "Scoring"],
       ["admin", "/admin.html", "Admin & setup", "Setup"],
       ["docs", "/api.html", "API", "API"],
@@ -302,7 +309,27 @@
     return { el: bar, get current() { return current; }, set(id) { current = id; render(); onChange(id); } };
   }
 
+  // BLPA Factions: the six Orders (fixed; same colors as the original console).
+  const ORDERS = [
+    { slug: "varghona", name: "Varghona", animal: "wolf", emoji: "🐺", color: "#64748b" },
+    { slug: "tuskarium", name: "Tuskarium", animal: "elephant", emoji: "🐘", color: "#78716c" },
+    { slug: "aetherwing", name: "Aetherwing", animal: "eagle", emoji: "🦅", color: "#2563eb" },
+    { slug: "serikon", name: "Serikon", animal: "snake", emoji: "🐍", color: "#16a34a" },
+    { slug: "thalkara", name: "Thalkara", animal: "kraken", emoji: "🦑", color: "#7c3aed" },
+    { slug: "ursonne", name: "Ursonne", animal: "bear", emoji: "🐻", color: "#d97706" },
+  ];
+  const ORDER = Object.fromEntries(ORDERS.map((o) => [o.slug, o]));
+  /** Small colored pill: "🐺 Varghona". Links to the Factions page unless link === false. */
+  function orderBadge(slug, { link = true, big = false, compact = false } = {}) {
+    const o = ORDER[slug];
+    if (!o) return "";
+    const attrs = { class: `order-badge${big ? " big" : ""}${compact ? " compact" : ""}`, style: { "--order": o.color }, title: `${o.name} (${o.animal})`, "aria-label": compact ? o.name : null };
+    const label = compact ? [o.emoji] : [o.emoji, " ", o.name];
+    return link ? h("a", { ...attrs, href: `/factions.html#${o.slug}` }, ...label) : h("span", attrs, ...label);
+  }
+
   window.BLST = {
+    ORDERS, ORDER, orderBadge,
     api, get, getToken, setToken, h, mount, append, $, param, fmtClock, fmtSec, fmtPct, fmtDate, fmtDay,
     clockFrom, stream, toast, debounce, statusBadge, teamDot, table, topbar, tabs,
   };

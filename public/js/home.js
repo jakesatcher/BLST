@@ -3,13 +3,21 @@
   $("#top").replaceWith(topbar("index"));
   const app = $("#app");
 
-  const [games, tournaments] = await Promise.all([get("/games"), get("/tournaments")]);
+  const [games, tournaments, factions] = await Promise.all([get("/games"), get("/tournaments"), get("/factions/orders").catch(() => [])]);
   const cards = gameCards(games, { showTournament: true });
 
   mount(
     app,
     h("h1", null, "Live & upcoming"),
     games.length ? cards.el : h("p", { class: "muted" }, "No games today."),
+    factions.length ? [
+      h("div", { class: "row between", style: { marginTop: "28px" } }, h("h2", { style: { margin: 0 } }, "Faction standings"), h("a", { href: "/factions.html" }, "All standings →")),
+      h("div", { class: "order-strip", style: { marginTop: "8px" } }, [...factions].sort((a, b) => a.rank - b.rank).map((o) => {
+        const meta = BLST.ORDER[o.slug];
+        return h("a", { href: `/factions.html#${o.slug}`, style: { "--order": meta.color }, title: `${meta.name}: ${o.total_points} points` },
+          h("small", null, `#${o.rank} ${meta.emoji}`), h("strong", null, o.total_points.toLocaleString()), h("small", null, meta.name));
+      })),
+    ] : "",
     h("h2", { style: { marginTop: "28px" } }, "Tournaments"),
     tournaments.length
       ? h(

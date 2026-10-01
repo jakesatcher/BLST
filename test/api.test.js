@@ -1,27 +1,21 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const crypto = require("crypto");
-const { startApp, startMockFactions, startWebhookReceiver, waitFor } = require("./helpers");
+const { startApp, startWebhookReceiver, waitFor } = require("./helpers");
 
 let ctx;
 let api;
-let factionsMock;
 let hookReceiver;
 
 test.before(async () => {
   ctx = await startApp();
   api = ctx.api;
-  factionsMock = await startMockFactions();
   hookReceiver = await startWebhookReceiver();
-  const config = require("../src/config");
-  config.factions.baseUrl = factionsMock.base;
-  config.factions.adminToken = factionsMock.token;
 });
 
 test.after(async () => {
   require("../src/services/gameControl").disarmAll();
   ctx.server.close();
-  factionsMock.server.close();
   hookReceiver.server.close();
   await require("../src/db").close();
 });
@@ -318,23 +312,27 @@ test("webhooks are signed and delivered", async () => {
   assert.ok(!hookReceiver.received.some((d) => d.body.event === "player.created"), "filtered by subscription");
 });
 
-test("BLPA Factions: link, sync players, push participation and achievements", async () => {
+test("BLPA Factions: players join their Order, tournament points and achievements are awarded", async () => {
+  // Every player with an email is a member automatically, with the same id
+  // and Order formula as the standalone Factions app.
+  const factions = require("../src/services/factions");
+  const sam = (await api("GET", `/players/${S.p.Sam}`)).body;
+  assert.equal(sam.factions_player_id, Buffer.from("sam@example.com").toString("base64url"));
+  assert.equal(sam.factions_order, factions.assignOrder("sam@example.com"));
+  const pubSam = (await api("GET", `/players/${S.p.Sam}`, undefined, null)).body;
+  assert.equal(pubSam.factions_player_id, undefined, "member id is PII");
+  assert.equal(pubSam.factions_order, sam.factions_order, "Order is public");
+
   const link = await api("POST", `/tournaments/${S.tid}/factions/link`, {});
   assert.equal(link.status, 200);
   assert.equal(link.body.created, true);
   const eventId = link.body.factions_event_id;
-  assert.equal(factionsMock.state.events.get(eventId).name, "BLPA Fall Classic");
-  assert.equal(factionsMock.state.events.get(eventId).startDate, "2026-10-10T00:00:00.000Z");
-
-  const sync = await api("POST", `/tournaments/${S.tid}/factions/sync-players`);
-  assert.equal(sync.body.synced, 5);
-  assert.equal(sync.body.skipped_no_email.length, 2, "Wes and Ray have no email");
-  const sam = (await api("GET", `/players/${S.p.Sam}`)).body;
-  assert.equal(sam.factions_player_id, Buffer.from("sam@example.com").toString("base64url"));
-  assert.ok(sam.factions_order);
-  const pubSam = (await api("GET", `/players/${S.p.Sam}`, undefined, null)).body;
-  assert.equal(pubSam.factions_player_id, undefined, "Factions id is PII");
-  assert.equal(pubSam.factions_order, sam.factions_order, "Order is public");
+  const event = (await api("GET", `/factions/events/${eventId}`)).body;
+  assert.equal(event.name, "BLPA Fall Classic");
+  assert.equal(event.start_date, "2026-10-10");
+  assert.equal(event.tournament_id, S.tid);
+  // Linking again reuses the event.
+  assert.equal((await api("POST", `/tournaments/${S.tid}/factions/link`, {})).body.factions_event_id, eventId);
 
   await api("PATCH", `/teams/${S.home}`, { final_placement: 1 });
   const preview = (await api("GET", `/tournaments/${S.tid}/factions/preview`)).body;
@@ -343,21 +341,39 @@ test("BLPA Factions: link, sync players, push participation and achievements", a
   assert.equal(samLine.points_earned, 12);
   assert.equal(samLine.placement, 1);
 
-  const push = await api("POST", `/tournaments/${S.tid}/factions/push`);
-  assert.equal(push.status, 200);
-  assert.equal(push.body.errors.length, 0);
-  assert.ok(push.body.pushed >= 5);
-  const rec = factionsMock.state.participation.get(`${eventId}:${sam.factions_player_id}`);
-  assert.equal(rec.pointsEarned, 12);
-  assert.ok(factionsMock.state.achievements.has(`${sam.factions_player_id}:blst:t${S.tid}:champion`));
+  const award = await api("POST", `/tournaments/${S.tid}/factions/award`);
+  assert.equal(award.status, 200);
+  assert.ok(award.body.awarded >= 5);
+  assert.equal(award.body.skipped_no_email.length, preview.participation.filter((p) => !p.member_id).length);
+  let member = (await api("GET", `/factions/members/${sam.factions_player_id}`)).body;
+  assert.equal(member.event_points, 12);
+  assert.equal(member.total_points, 12);
+  assert.ok(member.achievements.some((a) => a.code === `blst:t${S.tid}:champion`));
+  assert.equal(member.player.id, S.p.Sam);
 
-  // Pushing again is idempotent (upserts).
-  await api("POST", `/tournaments/${S.tid}/factions/push`);
-  assert.equal(factionsMock.state.participation.get(`${eventId}:${sam.factions_player_id}`).pointsEarned, 12);
+  // Awarding again replaces this tournament's numbers instead of adding.
+  await api("POST", `/tournaments/${S.tid}/factions/award`);
+  member = (await api("GET", `/factions/members/${sam.factions_player_id}`)).body;
+  assert.equal(member.event_points, 12);
+
+  // A correction that takes the title away withdraws the achievement.
+  await api("PATCH", `/teams/${S.home}`, { final_placement: 2 });
+  await api("POST", `/tournaments/${S.tid}/factions/award`);
+  member = (await api("GET", `/factions/members/${sam.factions_player_id}`)).body;
+  assert.equal(member.event_points, 10, "runner-up: 2 GP + 4 + 1 win + 3");
+  assert.ok(!member.achievements.some((a) => a.code === `blst:t${S.tid}:champion`));
+  await api("PATCH", `/teams/${S.home}`, { final_placement: 1 });
+  await api("POST", `/tournaments/${S.tid}/factions/award`);
 
   const totals = await api("GET", `/tournaments/${S.tid}/factions/order-totals`, undefined, null);
   assert.equal(totals.status, 200);
   assert.equal(totals.body.length, 6);
+  assert.equal(totals.body.find((o) => o.slug === sam.factions_order).total_points >= 12, true);
+  const pub = (await api("GET", "/factions", undefined, null)).body;
+  assert.equal(pub.orders.length, 6);
+  assert.ok(pub.events.some((e) => e.id === eventId && e.tournament_id === S.tid));
+  assert.ok(pub.leaders.some((l) => l.player_id === S.p.Sam));
+  assert.ok(!JSON.stringify(pub).includes("@"), "no emails in public Factions data");
 });
 
 test("SSE stream pushes snapshots to viewers", async () => {

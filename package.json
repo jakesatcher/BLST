@@ -10,7 +10,8 @@
     "seed": "node src/db/seed.js",
     "test": "node --test --test-concurrency=1 \"test/*.test.js\"",
     "sync:leagueapps": "node src/db/sync-leagueapps.js",
-    "railway": "bash scripts/railway-setup.sh"
+    "railway": "bash scripts/railway-setup.sh",
+    "factions:import": "node src/db/import-factions.js"
   },
   "repository": {
     "type": "git",

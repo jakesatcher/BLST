@@ -11,12 +11,13 @@ BLST handles live scoring and stat tracking for BLPA hockey tournaments. Scoreke
 | Page | Who | What |
 |---|---|---|
 | `/` | Public | Live and upcoming games, list of tournaments |
-| `/tournament.html?id=N` | Public | Scores, standings, leaders, skater and goalie stats, rosters, Order standings when linked to Factions |
+| `/factions.html` | Public | BLPA Factions: Order standings, standings by event, top members |
+| `/tournament.html?id=N` | Public | Scores, standings, leaders, skater and goalie stats, rosters, Factions standings when the tournament counts for Factions |
 | `/game.html?id=N` | Public | Live scoreboard (clock, score, shots on goal, power play, penalty-box countdowns), scoring summary, box score, lineups, play-by-play |
 | `/player.html?id=N` | Public | Career stats: imported history plus every BLST tournament |
 | `/account.html` | Anyone | Create an account or sign in (emailed code + texted code), change mobile number, sign out everywhere, delete account. First visit: set up the global admin |
 | `/scorekeeper.html` | Scorekeeper account or key | Clock and periods (Space starts/stops the clock), tap-a-number event entry, goalie pulls, lineup changes, edit/void/restore events |
-| `/admin.html` | Admin account | Accounts and access, tournaments and team count, teams, rosters and jersey numbers, moving players between teams, schedule and round-robin generator, roster and historical imports, API keys, webhooks, Factions sync |
+| `/admin.html` | Admin account | Accounts and access, BLPA Factions (members, points, achievements, events, bulk upload), tournaments and team count, teams, rosters and jersey numbers, moving players between teams, schedule and round-robin generator, roster and historical imports, API keys, webhooks |
 | `/api.html` | Anyone | API reference |
 
 ## What's tracked
@@ -55,17 +56,19 @@ createdb blst_test            # once; override with TEST_DATABASE_URL
 npm test
 ```
 
-The suite covers the stat engine (penalty replay, PP/SH, GWG, goalie decisions, OT and shootout, standings) and a full API run-through. That run-through covers auth, the team-count selector, roster import, a live game, roster moves, historical import, exports, signed webhooks, SSE, and Factions sync against a mock that matches the real Factions endpoints.
+The suite covers the stat engine (penalty replay, PP/SH, GWG, goalie decisions, OT and shootout, standings) and a full API run-through. That run-through covers auth, the team-count selector, roster import, a live game, roster moves, historical import, exports, signed webhooks, SSE and Factions points. `test/factions.test.js` covers Order assignment (checked against the standalone formula), permanence, membership, awards, bulk upload, privacy and the import from a standalone Factions database.
 
 ## Deploying to Railway
 
-BLST and BLPA Factions deploy together into one Railway project with one command (from this repo or the Factions repo):
+One command creates Postgres and the app, with BLPA Factions built in. You can
+run it from this repo or the blpafactions repo:
 
 ```bash
 npm run railway
 ```
 
-Let Railway's GitHub app read both repos first. **[docs/RAILWAY.md](docs/RAILWAY.md)** has the details.
+Let Railway's GitHub app read this repo first. **[docs/RAILWAY.md](docs/RAILWAY.md)**
+has the details, including the upgrade from the earlier two-app setup.
 
 ## Deploying to Heroku (for testing)
 
@@ -97,8 +100,6 @@ heroku addons:create heroku-postgresql:essential-0
 heroku config:set ADMIN_TOKEN="$(openssl rand -hex 24)" AUTH_SECRET="$(openssl rand -hex 32)"
 heroku config:set SMTP_URL="smtps://USER:PASS@smtp.example.com:465" EMAIL_FROM="BLST <no-reply@example.org>"
 heroku config:set TWILIO_ACCOUNT_SID="AC..." TWILIO_AUTH_TOKEN="..." TWILIO_FROM_NUMBER="+15551234567"
-# optional BLPA Factions link, see docs/FACTIONS.md
-heroku config:set FACTIONS_BASE_URL="https://your-factions-app.herokuapp.com" FACTIONS_ADMIN_TOKEN="..." FACTIONS_AUTO_SYNC=true
 git push heroku claude/great-bardeen-wfd39q:main
 heroku run npm run seed          # optional demo tournament
 heroku open
@@ -220,7 +221,7 @@ Re-broadcasting LiveBarn video needs LiveBarn's permission. The overlay is meant
 3. **Schedule.** Add games one at a time or generate a round robin.
 4. **Scorekeepers.** Have each scorekeeper create an account, then give them *Scorekeeper* access under **Admin → Accounts**. For a shared rink iPad, create a *scorekeeper* API key limited to the tournament instead.
 5. **Scorekeeper.** Pick the game and press **Start game**, which snapshots the lineups and sets the starting goalies. Press Space to start and stop the clock. Tap **Goal**, then tap scorer → A1 → A2 by jersey number. Time is captured when you tap and can be edited.
-6. **After playoffs.** Set each team's **Final place**, then use **Factions sync → Push**, or turn on auto-push.
+6. **Factions.** On the tournament's **Factions** tab, choose **Count this tournament for Factions**. Points update as games go final. After playoffs, set each team's **Final place** so the title bonus applies.
 
 ## Security
 
@@ -247,4 +248,15 @@ Emails and Factions player IDs (a reversible encoding of the email) are only eve
 
 ## BLPA Factions
 
-See [docs/FACTIONS.md](docs/FACTIONS.md). In short: a tournament becomes a Factions **Event**, players are registered by **email**, and each player's tournament result becomes an idempotent **EventParticipation** (`pointsEarned` from a points formula you can configure, `placement` from the final standings). Hat tricks, shutouts and championships are sent as **Achievements**.
+BLPA Factions (the Original Draft Society) is built in; it used to be a separate app.
+- **Membership:** every player with an email belongs to one of six Orders for
+  life, assigned from their email.
+- **Points:** tournaments that count for Factions earn points for each player's
+  Order automatically as games go final.
+- **Admin:** admins award bonus points and achievements, record other events,
+  and bulk-upload members.
+- **Public:** fans follow the standings on the **Factions** page, the home
+  page, tournament pages and player pages.
+
+See **[docs/FACTIONS.md](docs/FACTIONS.md)** for the rules, the API and moving
+data over from the standalone app (automatic for the earlier Railway setup).

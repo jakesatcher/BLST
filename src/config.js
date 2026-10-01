@@ -69,9 +69,4 @@ module.exports = {
     streamsPerIp: Number(process.env.MAX_STREAMS_PER_IP || 12),
     streamsTotal: Number(process.env.MAX_STREAMS_TOTAL || 5000),
   },
-  factions: {
-    baseUrl: (process.env.FACTIONS_BASE_URL || "").replace(/\/+$/, ""),
-    adminToken: process.env.FACTIONS_ADMIN_TOKEN || "",
-    autoSync: bool(process.env.FACTIONS_AUTO_SYNC, false),
-  },
 };

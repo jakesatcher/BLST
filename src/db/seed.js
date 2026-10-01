@@ -127,6 +127,11 @@ async function main() {
     { period: 2, home: true, type: "penalty", p: 5, vs: 0, clock: "13:10", extra: { infraction: "Roughing" } },
   ], { finish: false, periods: 2 });
   await control.clockAction(games[2].id, { action: "set", remaining_sec: 725 });
+  // Count the demo for BLPA Factions: every demo player has an email, so
+  // each already has an Order; award the points from the finished games.
+  const factions = require("../services/factions");
+  await factions.linkTournament(t.id);
+  await factions.awardResults(t.id);
   await db.query("INSERT INTO integration_settings (key, value) VALUES ('demo_seeded', to_jsonb(now())) ON CONFLICT (key) DO NOTHING");
   console.log(`Seeded "${t.name}" (tournament ${t.id}): 4 teams, ${n} players, ${games.length} games (2 final, 1 live).`);
 }

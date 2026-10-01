@@ -5,7 +5,6 @@ const { requireRole, hashKey, generateKey } = require("../middleware/auth");
 const { badRequest, notFound, intParam, optInt, optEnum, optString, optBool, requireFields, buildUpdate } = require("../lib/http");
 const { assertPublicUrl } = require("../lib/netguard");
 const webhooks = require("../services/webhooks");
-const factions = require("../services/factions");
 
 const router = Router();
 const admin = requireRole("admin");
@@ -167,34 +166,6 @@ router.post("/admin/webhooks/:id/test", admin, async (req, res) => {
   const hook = await db.one("SELECT * FROM webhooks WHERE id = $1", [intParam(req.params.id)]);
   if (!hook) throw notFound("webhook");
   res.status(202).json({ delivery_id: await webhooks.ping(hook) });
-});
-
-// ---------------------------------------------------------------------------
-// BLPA Factions
-
-router.get("/factions/status", admin, async (_req, res) => {
-  res.json(await factions.status());
-});
-
-router.post("/tournaments/:id/factions/link", admin, async (req, res) => {
-  res.json(await factions.linkTournament(intParam(req.params.id), { event_id: optString(req.body.event_id, "event_id", { max: 100 }) }));
-});
-
-router.post("/tournaments/:id/factions/sync-players", admin, async (req, res) => {
-  res.json(await factions.syncPlayers(intParam(req.params.id)));
-});
-
-router.get("/tournaments/:id/factions/preview", admin, async (req, res) => {
-  res.json(await factions.participationPreview(intParam(req.params.id)));
-});
-
-router.post("/tournaments/:id/factions/push", admin, async (req, res) => {
-  res.json(await factions.pushResults(intParam(req.params.id)));
-});
-
-// Public: Order totals contain no PII (same as on the Factions side).
-router.get("/tournaments/:id/factions/order-totals", async (req, res) => {
-  res.json(await factions.orderTotals(intParam(req.params.id)));
 });
 
 module.exports = router;

@@ -7,7 +7,7 @@ const registrations = require("./registrations");
 // LeagueApps Private API client and registration sync.
 //
 // Verified against LeagueApps' official sample (github.com/LeagueApps/api-example)
-// and the BLPA Factions member import:
+// and the standalone BLPA Factions member import (members-2, see syncMembers):
 //   auth   POST {auth}/v2/auth/token, grant_type=jwt-bearer, assertion = RS256 JWT
 //          { aud: https://auth.leagueapps.io/v2/auth/token, iss/sub: client id, iat, exp: +300 }
 //   export GET {api}/v2/sites/{siteId}/export/registrations-2?last-updated=&last-id=
@@ -270,6 +270,71 @@ async function sync({ fromScratch = false } = {}) {
   }
 }
 
+const MEMBERS_SOURCE = "leagueapps-members-2";
+
+/**
+ * BLPA Factions member import (ported from the standalone Factions app):
+ * every LeagueApps member with an email becomes a Factions member and gets
+ * their Order, even before they register for a tournament. members-2 is
+ * the export whose fields are documented (id, userId, firstName, lastName,
+ * email, deleted, lastUpdated). Existing members keep their Order.
+ */
+async function syncMembers({ fromScratch = false } = {}) {
+  if (!isConfigured()) throw new HttpError(503, "LeagueApps isn't configured (set LEAGUEAPPS_SITE_ID, LEAGUEAPPS_CLIENT_ID, LEAGUEAPPS_PRIVATE_KEY)");
+  const factions = require("./factions");
+  const client = await db.getPool().connect();
+  const lockKey = 4815162343;
+  try {
+    const locked = (await client.query("SELECT pg_try_advisory_lock($1) AS ok", [lockKey])).rows[0].ok;
+    if (!locked) throw conflict("a LeagueApps member import is already running");
+    const saved = await db.one("SELECT * FROM sync_state WHERE source = $1", [MEMBERS_SOURCE]);
+    const start = fromScratch || !saved ? { lastUpdated: 0, lastId: 0 } : { lastUpdated: Number(saved.last_updated), lastId: Number(saved.last_id) };
+    const summary = { pages: 0, seen: 0, new_members: 0, existing_members: 0, skipped_deleted: 0, skipped_no_email: 0, errors: [], cursor: start };
+    for await (const { rows, cursor } of iterate("members-2", start)) {
+      summary.pages += 1;
+      for (const m of rows) {
+        summary.seen += 1;
+        if (m.deleted) {
+          summary.skipped_deleted += 1;
+          continue;
+        }
+        if (!m.email) {
+          summary.skipped_no_email += 1;
+          continue;
+        }
+        try {
+          const { created } = await factions.getOrCreateMember({
+            email: m.email,
+            display_name: [m.firstName, m.lastName].filter(Boolean).join(" ") || null,
+            leagueapps_user_id: m.userId != null ? String(m.userId) : null,
+            source: "leagueapps",
+          });
+          if (created) summary.new_members += 1;
+          else summary.existing_members += 1;
+        } catch (err) {
+          if (summary.errors.length < 50) summary.errors.push({ leagueapps_user_id: m.userId ?? null, error: err.message });
+        }
+      }
+      summary.cursor = cursor;
+      await db.query(
+        `INSERT INTO sync_state (source, last_updated, last_id, last_run_at) VALUES ($1, $2, $3, now())
+         ON CONFLICT (source) DO UPDATE SET last_updated = $2, last_id = $3, last_run_at = now()`,
+        [MEMBERS_SOURCE, cursor.lastUpdated, cursor.lastId],
+      );
+    }
+    await db.query(
+      `INSERT INTO sync_state (source, last_updated, last_id, last_run_at, last_result) VALUES ($1, $2, $3, now(), $4)
+       ON CONFLICT (source) DO UPDATE SET last_run_at = now(), last_result = $4`,
+      [MEMBERS_SOURCE, summary.cursor.lastUpdated, summary.cursor.lastId, JSON.stringify(summary)],
+    );
+    if (summary.new_members) emitDomain("factions.updated", { imported: summary.new_members });
+    return summary;
+  } finally {
+    await client.query("SELECT pg_advisory_unlock($1)", [lockKey]).catch(() => {});
+    client.release();
+  }
+}
+
 /** First few raw records with how each field was read, to confirm the mapping. */
 async function preview() {
   if (!isConfigured()) throw new HttpError(503, "LeagueApps isn't configured");
@@ -316,6 +381,7 @@ async function status() {
     cursor: state ? { last_updated: state.last_updated, last_id: state.last_id } : null,
     programs,
     auto_sync_minutes: Number(process.env.LEAGUEAPPS_SYNC_INTERVAL_MIN || 0),
+    members: await db.one("SELECT last_run_at, last_result FROM sync_state WHERE source = $1", [MEMBERS_SOURCE]),
   };
 }
 
@@ -325,12 +391,15 @@ function startSchedule(log = console) {
   if (!minutes || !isConfigured() || timer) return;
   timer = setInterval(() => {
     sync().then((s) => s.created + s.updated && log.log(`LeagueApps sync: ${s.created} new, ${s.updated} updated`))
-      .catch((err) => err.status !== 409 && log.error("LeagueApps sync failed:", err.message));
+      .catch((err) => err.status !== 409 && log.error("LeagueApps sync failed:", err.message))
+      .then(() => syncMembers())
+      .then((s) => s && s.new_members && log.log(`LeagueApps members: ${s.new_members} new Factions members`))
+      .catch((err) => err.status !== 409 && log.error("LeagueApps member import failed:", err.message));
   }, Math.max(5, minutes) * 60000);
   timer.unref();
 }
 
 module.exports = {
-  SOURCE, FIELD_CANDIDATES, settings, isConfigured, buildAssertion, accessToken, exportPage, iterate, mapRecord, sync, preview,
+  SOURCE, MEMBERS_SOURCE, FIELD_CANDIDATES, settings, isConfigured, buildAssertion, accessToken, exportPage, iterate, mapRecord, sync, syncMembers, preview,
   setFieldMap, status, startSchedule, timing, _reset: () => (tokenCache = null),
 };
