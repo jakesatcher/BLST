@@ -27,8 +27,42 @@
   ],
   "env": {
     "ADMIN_TOKEN": {
-      "description": "Admin password for the web app. Auto-generated: find it later under Settings \u2192 Reveal Config Vars.",
+      "description": "Setup key for creating the first global admin account (Account \u2192 Set up admin). It stops working once an admin account exists. Auto-generated: Settings \u2192 Reveal Config Vars.",
       "generator": "secret"
+    },
+    "AUTH_SECRET": {
+      "description": "Keys the sign-in code hashes so codes in progress survive restarts. Auto-generated.",
+      "generator": "secret"
+    },
+    "SMTP_URL": {
+      "description": "Email for sign-in codes, e.g. smtps://USER:PASS@smtp.postmarkapp.com:465 (any SMTP provider). Until set, codes are printed in the Heroku log.",
+      "value": "",
+      "required": false
+    },
+    "EMAIL_FROM": {
+      "description": "Sender for sign-in emails, e.g. BLST <no-reply@your-domain.org>.",
+      "value": "",
+      "required": false
+    },
+    "TWILIO_ACCOUNT_SID": {
+      "description": "Twilio account SID for text-message codes.",
+      "value": "",
+      "required": false
+    },
+    "TWILIO_AUTH_TOKEN": {
+      "description": "Twilio auth token.",
+      "value": "",
+      "required": false
+    },
+    "TWILIO_FROM_NUMBER": {
+      "description": "Twilio phone number that sends the codes, e.g. +15551234567 (or set TWILIO_MESSAGING_SERVICE_SID).",
+      "value": "",
+      "required": false
+    },
+    "AUTH_LOG_CODES": {
+      "description": "\"true\" prints sign-in codes in the Heroku log instead of sending them, for testing before email/SMS are set up. Turn off once SMTP_URL and Twilio are set.",
+      "value": "true",
+      "required": false
     },
     "SEED_DEMO": {
       "description": "\"true\" loads a demo tournament (4 teams, 2 finished games, 1 live game) on first deploy so you can try things out. Delete it from Admin \u2192 Settings when you're done.",

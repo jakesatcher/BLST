@@ -8,24 +8,32 @@
   // Access
 
   let me = await get("/me").catch(() => ({ role: null }));
-  if (!me.role || me.role === "readonly") return renderLogin();
+  if (!me.role || me.role === "readonly" || me.role === "user") return renderLogin();
   if (!gameId) return renderPicker();
 
   function renderLogin() {
+    const box = h("div");
     const input = h("input", { type: "password", placeholder: "Paste your scorekeeper key", autocomplete: "off", style: { width: "100%" } });
-    mount(app, h("div", { class: "card", style: { maxWidth: "520px", margin: "24px auto" } },
+    mount(app, h("div", { class: "card auth-card" },
       h("h1", null, "Scorekeeper sign-in"),
-      h("p", { class: "muted" }, "Use the scorekeeper key your admin gave you (Admin → API keys), or the admin password. This device remembers it until you sign out."),
-      h("form", { class: "stack", onsubmit: async (e) => {
-        e.preventDefault();
-        setToken(input.value.trim());
-        me = await get("/me").catch(() => ({ role: null }));
-        if (!me.role || me.role === "readonly") {
-          setToken("");
-          return toast("That key can't score games", true);
-        }
-        location.reload();
-      } }, input, h("button", { class: "primary", style: { width: "100%" } }, "Sign in"))));
+      me.role === "user" ? h("p", { class: "notice" }, "You're signed in, but your account can't score games yet. Ask an admin to make you a scorekeeper.") : "",
+      box,
+      h("details", null, h("summary", null, "Use a device key instead"),
+        h("form", { class: "stack", style: { marginTop: "8px" }, onsubmit: async (e) => {
+          e.preventDefault();
+          setToken(input.value.trim());
+          me = await get("/me").catch(() => ({ role: null }));
+          if (!me.role || me.role === "readonly" || me.role === "user") {
+            setToken("");
+            return toast("That key can't score games", true);
+          }
+          location.reload();
+        } }, h("p", { class: "small muted" }, "For a shared rink iPad: the scorekeeper key your admin made under Admin → API keys."), input, h("button", null, "Use key")))));
+    BLST.signInFlow(box, {
+      mode: "login",
+      intro: "Sign in with your account: we'll email you a code, then text one to your phone. An admin must have given your account scorekeeper access.",
+      onDone: () => location.reload(),
+    });
   }
 
   async function renderPicker() {

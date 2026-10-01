@@ -14,8 +14,9 @@ BLST handles live scoring and stat tracking for BLPA hockey tournaments. Scoreke
 | `/tournament.html?id=N` | Public | Scores, standings, leaders, skater and goalie stats, rosters, Order standings when linked to Factions |
 | `/game.html?id=N` | Public | Live scoreboard (clock, score, shots on goal, power play, penalty-box countdowns), scoring summary, box score, lineups, play-by-play |
 | `/player.html?id=N` | Public | Career stats: imported history plus every BLST tournament |
-| `/scorekeeper.html` | Scorekeeper key | Clock and periods (Space starts/stops the clock), tap-a-number event entry, goalie pulls, lineup changes, edit/void/restore events |
-| `/admin.html` | Admin | Tournaments and team count, teams, rosters and jersey numbers, moving players between teams, schedule and round-robin generator, roster and historical imports, API keys, webhooks, Factions sync |
+| `/account.html` | Anyone | Create an account or sign in (emailed code + texted code), change mobile number, sign out everywhere, delete account. First visit: set up the global admin |
+| `/scorekeeper.html` | Scorekeeper account or key | Clock and periods (Space starts/stops the clock), tap-a-number event entry, goalie pulls, lineup changes, edit/void/restore events |
+| `/admin.html` | Admin account | Accounts and access, tournaments and team count, teams, rosters and jersey numbers, moving players between teams, schedule and round-robin generator, roster and historical imports, API keys, webhooks, Factions sync |
 | `/api.html` | Anyone | API reference |
 
 ## What's tracked
@@ -43,7 +44,9 @@ npm run seed                  # optional demo tournament: 4 teams, 2 final games
 npm run dev                   # http://localhost:3000
 ```
 
-If `ADMIN_TOKEN` is unset, BLST **fails closed**: nothing can be changed. For quick local experiments, set `ALLOW_OPEN_DEV=true` to allow changes without a key. That flag is ignored when deployed, and a deployed server refuses to start without a strong `ADMIN_TOKEN` (16 or more characters).
+Without email and SMS providers, a local server prints sign-in codes in its log (`[dev email to …]`, `[dev sms to …]`), so you can create accounts without sending anything.
+
+If `ADMIN_TOKEN` is unset and no admin account exists, BLST **fails closed**: nothing can be changed. For quick local experiments, set `ALLOW_OPEN_DEV=true` to allow changes without a key. That flag is ignored when deployed, and a deployed server refuses to start without a strong `ADMIN_TOKEN` (16 or more characters).
 
 ### Tests
 
@@ -62,20 +65,28 @@ The suite covers the stat engine (penalty replay, PP/SH, GWG, goalie decisions, 
 
 The button reads [`app.json`](app.json) and:
 - creates the app with a Heroku Postgres database (`essential-0`, about $5/month);
-- generates a random **admin password** (`ADMIN_TOKEN`);
+- generates a random **setup key** (`ADMIN_TOKEN`) and `AUTH_SECRET`;
 - runs database migrations in the release phase;
 - loads a **demo tournament** on first deploy (`SEED_DEMO=true`) so there's something to click around in. Delete it any time from Admin → Settings.
 
 The button uses this branch. After the branch is merged, change the URL's `tree/...` part to `tree/main`.
 
-**Signing in after deploy:** open the app → **Admin**. For the password, go to the Heroku dashboard → your app → **Settings → Reveal Config Vars** and copy `ADMIN_TOKEN`. Or run `heroku config:get ADMIN_TOKEN -a <app>`.
+**First sign-in after deploy:** open the app → **Admin & setup**. It asks you to **set up the admin account**:
+1. Enter the setup key: Heroku dashboard → your app → **Settings → Reveal Config Vars** → `ADMIN_TOKEN` (or `heroku config:get ADMIN_TOKEN -a <app>`), plus your email and mobile number.
+2. Enter the code that was emailed to you, then the code texted to your phone.
+
+That makes you the **global admin**. From then on `ADMIN_TOKEN` no longer works as a password: every admin signs in with an emailed code **and** a texted code.
+
+**Email and text messages.** Set `SMTP_URL` and `EMAIL_FROM` (any SMTP service: Postmark, SendGrid, Mailgun, Amazon SES) and the Twilio vars (`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`). Until they're set, the Deploy button's `AUTH_LOG_CODES=true` prints codes in the Heroku log (`heroku logs --tail`) so you can test. Set `AUTH_LOG_CODES=false` once real sending works.
 
 ### From the command line
 
 ```bash
 heroku create blst-test
 heroku addons:create heroku-postgresql:essential-0
-heroku config:set ADMIN_TOKEN="$(openssl rand -hex 24)"
+heroku config:set ADMIN_TOKEN="$(openssl rand -hex 24)" AUTH_SECRET="$(openssl rand -hex 32)"
+heroku config:set SMTP_URL="smtps://USER:PASS@smtp.example.com:465" EMAIL_FROM="BLST <no-reply@example.org>"
+heroku config:set TWILIO_ACCOUNT_SID="AC..." TWILIO_AUTH_TOKEN="..." TWILIO_FROM_NUMBER="+15551234567"
 # optional BLPA Factions link, see docs/FACTIONS.md
 heroku config:set FACTIONS_BASE_URL="https://your-factions-app.herokuapp.com" FACTIONS_ADMIN_TOKEN="..." FACTIONS_AUTO_SYNC=true
 git push heroku claude/great-bardeen-wfd39q:main
@@ -83,7 +94,17 @@ heroku run npm run seed          # optional demo tournament
 heroku open
 ```
 
-The `Procfile` runs migrations in the release phase. TLS to Heroku Postgres is turned on automatically, and the app refuses to boot on Heroku without `ADMIN_TOKEN`. Run **one web dyno**: live updates fan out in memory. Before scaling out, move the event bus in `src/lib/bus.js` to Postgres LISTEN/NOTIFY.
+The `Procfile` runs migrations in the release phase. TLS to Heroku Postgres is turned on automatically, and the app refuses to boot on Heroku without `ADMIN_TOKEN` until an admin account exists. Run **one web dyno**: live updates fan out in memory. Before scaling out, move the event bus in `src/lib/bus.js` to Postgres LISTEN/NOTIFY.
+
+## Accounts and sign-in
+
+Everyone signs in the same way, with **two one-time codes**: one emailed to them, then one texted to their phone. There are no passwords. BLST stores only each account's **email address and mobile number** (plus its access level).
+
+- **Standard users** create their own account at `/account.html` (**Create account**). A standard account has no staff access.
+- **Admins** give people access under **Admin → Accounts**: *Scorekeeper* (optionally limited to one tournament) or *Global admin*. Changing someone's access signs them out everywhere so it applies immediately. You can also disable, sign out or delete accounts. The last admin can't be removed.
+- **Sessions:** admins stay signed in for 12 hours, scorekeepers 24 hours, standard users 30 days. Anyone can **sign out everywhere** or **delete their account** from `/account.html`.
+- **Lost phone (admin):** another admin can update access, or the account holder can sign in and change their number (that needs the emailed code and a code to the new number). If the only admin loses their phone, set `ADMIN_TOKEN_BREAK_GLASS=true`, sign in with `ADMIN_TOKEN` under Admin → *Use an API key instead*, fix things, then remove the flag.
+- **API keys** are still there for machines and shared rink iPads (Admin → API keys).
 
 ## Team logos
 
@@ -187,13 +208,14 @@ Re-broadcasting LiveBarn video needs LiveBarn's permission. The overlay is meant
 1. **Admin → New tournament.** Pick the number of teams (you can change it later), period and OT lengths, and points per result.
 2. **Teams & rosters.** Rename teams, set colors, and add players with jersey numbers. Or use **Roster import** with a CSV of `first_name,last_name,number,position,team,email`.
 3. **Schedule.** Add games one at a time or generate a round robin.
-4. **API keys.** Create a *scorekeeper* key for each rink device.
+4. **Scorekeepers.** Have each scorekeeper create an account, then give them *Scorekeeper* access under **Admin → Accounts**. For a shared rink iPad, create a *scorekeeper* API key limited to the tournament instead.
 5. **Scorekeeper.** Pick the game and press **Start game**, which snapshots the lineups and sets the starting goalies. Press Space to start and stop the clock. Tap **Goal**, then tap scorer → A1 → A2 by jersey number. Time is captured when you tap and can be edited.
 6. **After playoffs.** Set each team's **Final place**, then use **Factions sync → Push**, or turn on auto-push.
 
 ## Security
 
 BLST follows the OWASP Top 10 (2021) and OWASP API Security Top 10 (2023). See **[SECURITY.md](SECURITY.md)** for the control-by-control mapping, the operator checklist and residual risks. In short:
+- **Accounts:** MFA for every sign-in (emailed code + texted code); short admin sessions; only email and phone stored.
 - **Keys:** scoped, expiring API keys; brute-force lockout.
 - **Limits:** rate and size limits.
 - **Network:** SSRF protection for webhooks and link checks.
@@ -204,7 +226,7 @@ CI runs the full test suite (including `test/security.test.js`) and `npm audit` 
 
 ## API
 
-Base path `/api/v1`. Reads are public, and writes need `Authorization: Bearer <key>`. The full reference is at [`/api.html`](public/api.html). Main groups:
+Base path `/api/v1`. Reads are public, and writes need `Authorization: Bearer <key>` (an API key, or the session token from signing in). The full reference is at [`/api.html`](public/api.html). Main groups:
 
 - **Live data:** `/tournaments/:id/{games,standings,leaders,stats/skaters,stats/goalies,teams}`, `/games/:id` (full live snapshot), `/stream?game_id=` or `?tournament_id=` (SSE).
 - **Export API:** `/export/tournaments/:id`, `/export/tournaments/:id/{skaters,goalies,standings,games}`, `/export/games/:id`, `/export/players/:id`, `/export/players`. JSON by default; add `?format=csv` for CSV. Every payload carries a `schema_version`.

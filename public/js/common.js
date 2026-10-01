@@ -27,7 +27,7 @@
     // A stored key that was revoked or expired: forget it and retry public reads.
     if (res.status === 401 && token) {
       const peek = await res.clone().json().catch(() => ({}));
-      if (/invalid, expired or revoked/.test(peek.error || "")) {
+      if (/invalid, expired or revoked|session has expired|admin password is retired/.test(peek.error || "")) {
         setToken("");
         if (method === "GET") return api(method, path, body);
       }
@@ -255,14 +255,24 @@
       ["docs", "/api.html", "API", "API"],
     ];
     const who = h("span", { class: "who" });
+    const signInLink = () => mount(who, h("a", { href: `/account.html?next=${encodeURIComponent(location.pathname + location.search)}` }, "Sign in"));
     if (getToken()) {
       get("/me")
         .then((me) => {
-          if (!me.role || me.via === "dev-open") return;
-          mount(who, h("span", { title: me.key_name ? `Signed in with key "${me.key_name}"` : "Signed in" }, me.role), " · ",
-            h("a", { href: "#", onclick: (e) => { e.preventDefault(); setToken(""); location.reload(); } }, "Sign out"));
+          if (me.via === "dev-open") return;
+          if (!me.role) return signInLink();
+          const label = me.via === "session" ? me.email : me.role;
+          mount(who, h("a", { href: "/account.html", class: active === "account" ? "active" : null, title: me.key_name ? `Signed in with key "${me.key_name}"` : `Signed in (${me.role})` }, label), " · ",
+            h("a", { href: "#", onclick: async (e) => {
+              e.preventDefault();
+              await api("POST", "/auth/logout").catch(() => {});
+              setToken("");
+              location.reload();
+            } }, "Sign out"));
         })
         .catch(() => {});
+    } else {
+      signInLink();
     }
     return h(
       "header",

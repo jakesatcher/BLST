@@ -6,21 +6,35 @@
   const me = await get("/me").catch(() => ({ role: null }));
   if (me.role !== "admin") return renderLogin();
 
-  function renderLogin() {
-    const input = h("input", { type: "password", placeholder: "Admin password", autocomplete: "off", style: { width: "100%" } });
-    mount(app, h("div", { class: "card", style: { maxWidth: "560px", margin: "24px auto" } },
-      h("h1", null, "Admin sign-in"),
-      h("p", { class: "muted" }, "Enter the admin password: the server's ADMIN_TOKEN (on Heroku: Settings → Reveal Config Vars), or an admin API key. This device remembers it until you sign out."),
-      h("form", { class: "stack", onsubmit: async (e) => {
-        e.preventDefault();
-        setToken(input.value.trim());
-        const who = await get("/me").catch(() => ({ role: null }));
-        if (who.role !== "admin") {
-          setToken("");
-          return toast("Not an admin key", true);
-        }
-        location.reload();
-      } }, input, h("button", { class: "primary", style: { width: "100%" } }, "Sign in"))));
+  async function renderLogin() {
+    const status = await get("/auth/status").catch(() => ({}));
+    const box = h("div");
+    mount(app, h("div", { class: "card auth-card" },
+      h("h1", null, status.setup_needed ? "Set up the admin account" : "Admin sign-in"),
+      me.role ? h("p", { class: "notice" }, "You're signed in, but this account isn't an admin. Ask an admin for access.") : "",
+      box,
+      status.setup_needed ? "" : h("details", null, h("summary", null, "Use an API key instead"), keyForm())));
+    BLST.signInFlow(box, {
+      mode: status.setup_needed ? "setup" : "login",
+      intro: status.setup_needed
+        ? "No admin account exists yet. Create the global admin: it signs in with an emailed code and a text-message code every time. After that, the admin password (ADMIN_TOKEN) stops working."
+        : "Admins sign in with two codes: one emailed, one texted to your phone.",
+      onDone: () => location.reload(),
+    });
+  }
+
+  function keyForm() {
+    const input = h("input", { type: "password", placeholder: "Admin API key", autocomplete: "off", style: { width: "100%" } });
+    return h("form", { class: "stack", style: { marginTop: "8px" }, onsubmit: async (e) => {
+      e.preventDefault();
+      setToken(input.value.trim());
+      const who = await get("/me").catch(() => ({ role: null }));
+      if (who.role !== "admin") {
+        setToken("");
+        return toast("Not an admin key", true);
+      }
+      location.reload();
+    } }, h("p", { class: "small muted" }, "For automation and break-glass access only. People should sign in with their account."), input, h("button", null, "Use key"));
   }
 
   // -------------------------------------------------------------------------
@@ -77,7 +91,7 @@
   // Shell
 
   const view = h("div");
-  const mainTabs = tabs([["tournaments", "Tournaments"], ["players", "Players"], ["history", "Historical import"], ["keys", "API keys"], ["webhooks", "Webhooks"], ["factions", "BLPA Factions"], ["security", "Security"]],
+  const mainTabs = tabs([["tournaments", "Tournaments"], ["players", "Players"], ["history", "Historical import"], ["accounts", "Accounts"], ["keys", "API keys"], ["webhooks", "Webhooks"], ["factions", "BLPA Factions"], ["security", "Security"]],
     (t) => { history.replaceState(null, "", `#${t}`); show(t); }, location.hash.slice(1).split("/")[0] || "tournaments", { size: "big" });
   mount(app,
     h("div", { class: "row between" }, h("h1", null, "Admin"),
@@ -85,7 +99,7 @@
     mainTabs.el, view);
 
   function show(tab) {
-    const fn = { tournaments: tournamentsView, players: playersView, history: historyView, keys: keysView, webhooks: webhooksView, factions: factionsGlobalView, security: securityView }[tab];
+    const fn = { tournaments: tournamentsView, players: playersView, history: historyView, accounts: accountsView, keys: keysView, webhooks: webhooksView, factions: factionsGlobalView, security: securityView }[tab];
     mount(view, h("p", { class: "muted" }, "Loading…"));
     fn().catch((err) => mount(view, h("p", { class: "notice error" }, err.message)));
   }
@@ -974,6 +988,51 @@
   }
 
   // -------------------------------------------------------------------------
+  // Accounts (people who sign in with email + text-message codes)
+
+  async function accountsView() {
+    const [list, tournamentsForAccounts] = await Promise.all([get("/admin/accounts"), get("/tournaments")]);
+    const roleLabel = { admin: "Admin", scorekeeper: "Scorekeeper", user: "Standard" };
+    const edit = async (a) => {
+      const v = await formSheet(`Access for ${a.email}`, [
+        { name: "role", label: "Access", type: "select", value: a.role, options: [["user", "Standard (no staff access)"], ["scorekeeper", "Scorekeeper"], ["admin", "Global admin"]] },
+        { name: "tournament_id", label: "Scorekeeper limited to tournament", type: "select", value: a.tournament_id || "",
+          options: [["", "All tournaments"], ...tournamentsForAccounts.map((t) => [t.id, t.name])], hint: "Only applies to scorekeepers." },
+      ], { submitLabel: "Save", intro: "Changing access signs this person out everywhere so the new access applies straight away." });
+      if (!v) return;
+      await run(() => api("PATCH", `/admin/accounts/${a.id}`, { role: v.role, tournament_id: v.tournament_id ? Number(v.tournament_id) : null }), "Access updated");
+      accountsView();
+    };
+    mount(view,
+      h("div", { class: "card" }, h("h2", null, "Accounts"),
+        h("p", { class: "muted small" }, "Anyone can create a standard account at ", h("a", { href: "/account.html#signup" }, "/account.html"),
+          " with their email and mobile number (both confirmed with one-time codes). Give people scorekeeper or admin access here. Every sign-in needs an emailed code and a texted code. Phone numbers are masked; BLST stores nothing else about account holders."),
+        table([
+          { key: "email", label: "Email", fmt: (a) => h("span", null, a.email, a.id === me.account_id ? h("span", { class: "badge", style: { marginLeft: "6px" } }, "you") : "") },
+          { key: "phone", label: "Mobile" },
+          { key: "role", label: "Access", fmt: (a) => `${roleLabel[a.role]}${a.role === "scorekeeper" && a.tournament ? ` · ${a.tournament}` : ""}` },
+          { key: "last_login_at", label: "Last sign-in", fmt: (a) => (a.last_login_at ? fmtDate(a.last_login_at) : "never") },
+          { key: "sessions", label: "Devices", num: true },
+          { key: "disabled", label: "", sort: false, fmt: (a) => h("div", { class: "row" },
+            a.disabled ? h("span", { class: "badge" }, "disabled") : "",
+            h("button", { class: "sm", onclick: () => edit(a) }, "Access"),
+            h("button", { class: "sm", onclick: async () => {
+              await run(() => api("POST", `/admin/accounts/${a.id}/logout`), "Signed out everywhere");
+              accountsView();
+            } }, "Sign out"),
+            h("button", { class: "sm", onclick: async () => {
+              await run(() => api("PATCH", `/admin/accounts/${a.id}`, { disabled: !a.disabled }), a.disabled ? "Enabled" : "Disabled");
+              accountsView();
+            } }, a.disabled ? "Enable" : "Disable"),
+            h("button", { class: "sm danger", onclick: async () => {
+              if (!(await confirmSheet(`Delete the account ${a.email}? Their email and phone number are erased.`, { title: "Delete account", confirmLabel: "Delete", danger: true }))) return;
+              await run(() => api("DELETE", `/admin/accounts/${a.id}`), "Deleted");
+              accountsView();
+            } }, "Delete")) },
+        ], list, { sortKey: "email", sortDir: 1 })));
+  }
+
+  // -------------------------------------------------------------------------
   // API keys
 
   async function keysView() {
@@ -1087,8 +1146,15 @@
     mount(view,
       h("div", { class: "card" }, h("h2", null, "Security checklist"),
         h("ul", { class: "stack", style: { listStyle: "none", padding: 0 } },
-          ok(sec.admin_token_set && sec.admin_token_strong, sec.admin_token_set ? (sec.admin_token_strong ? "Strong admin password (ADMIN_TOKEN) is set" : "Admin password is too short: use at least 16 random characters") : "No admin password (ADMIN_TOKEN) set"),
-          ok(!sec.open_dev_mode, sec.open_dev_mode ? "Open development mode is ON: anyone can make changes" : "Changes require a key"),
+          ok(sec.accounts.admins > 0, sec.accounts.admins > 0 ? `${sec.accounts.admins} admin account(s), all signing in with email + text-message codes` : "No admin account yet: set one up (Account → Set up admin)"),
+          sec.accounts.admins > 0
+            ? ok(!sec.accounts.admin_token_break_glass, sec.accounts.admin_token_break_glass ? "ADMIN_TOKEN_BREAK_GLASS is on: the admin password works without MFA. Turn it off when you're done." : "Admin password (ADMIN_TOKEN) is retired: admins must use MFA")
+            : ok(sec.admin_token_set && sec.admin_token_strong, sec.admin_token_set ? (sec.admin_token_strong ? "Strong setup key (ADMIN_TOKEN) is set" : "ADMIN_TOKEN is too short: use at least 16 random characters") : "No ADMIN_TOKEN set, so no admin can be set up"),
+          ok(sec.accounts.email_configured, sec.accounts.email_configured ? "Email codes are sent by SMTP" : "Email isn't set up (SMTP_URL): codes only appear in the server log"),
+          ok(sec.accounts.sms_configured, sec.accounts.sms_configured ? `Text-message codes are sent by Twilio (countries: +${sec.accounts.sms_country_codes.join(", +")})` : "Text messages aren't set up (TWILIO_*): codes only appear in the server log"),
+          ok(!sec.deployed || !sec.accounts.codes_in_log, sec.accounts.codes_in_log ? "Sign-in codes are printed in the server log (development)" : "Sign-in codes are never logged"),
+          ok(!sec.deployed || sec.accounts.auth_secret_set, sec.accounts.auth_secret_set ? "AUTH_SECRET is set" : sec.deployed ? "AUTH_SECRET isn't set: sign-ins in progress are lost on restart" : "AUTH_SECRET isn't set (fine for local development)"),
+          ok(!sec.open_dev_mode, sec.open_dev_mode ? "Open development mode is ON: anyone can make changes" : "Changes require an account or key"),
           ok(!sec.private_network_urls_allowed, sec.private_network_urls_allowed ? "Webhooks may target private networks (ALLOW_PRIVATE_NETWORK_URLS)" : "Webhooks and link checks can't reach internal networks"),
           ok(true, `Rate limits: ${sec.rate_limits.readsPerMinute} reads / ${sec.rate_limits.writesPerMinute} changes per minute per IP; sign-in locked after ${sec.rate_limits.authFailuresPer15Min} bad keys in 15 min`),
           ok(true, `Browser access (CORS): ${sec.cors_origins.join(", ")}`),

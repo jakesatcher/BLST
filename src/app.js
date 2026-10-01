@@ -95,6 +95,7 @@ function createApp() {
     if (req.auth.role || req.get("authorization")) res.set("Cache-Control", "no-store");
     next();
   });
+  api.use(require("./routes/auth"));
   api.use(require("./routes/media"));
   api.use(require("./routes/streams"));
   api.use(require("./routes/tournaments"));

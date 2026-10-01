@@ -11,7 +11,10 @@ const router = Router();
 const admin = requireRole("admin");
 
 router.get("/me", (req, res) => {
-  res.json({ role: req.auth.role, via: req.auth.via, key_name: req.auth.keyName || null, tournament_id: req.auth.tournamentId || null });
+  res.json({
+    role: req.auth.role, via: req.auth.via, key_name: req.auth.keyName || null, tournament_id: req.auth.tournamentId || null,
+    account_id: req.auth.accountId || null, email: req.auth.email || null,
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -79,6 +82,18 @@ router.get("/admin/security", admin, async (_req, res) => {
     private_network_urls_allowed: config.allowPrivateUrls,
     rate_limits: config.rateLimits,
     last_24h: counts,
+    accounts: {
+      ...(await db.one(`SELECT count(*) FILTER (WHERE role = 'admin' AND disabled_at IS NULL) AS admins,
+                               count(*) FILTER (WHERE role = 'scorekeeper' AND disabled_at IS NULL) AS scorekeepers,
+                               count(*) FILTER (WHERE role = 'user' AND disabled_at IS NULL) AS users FROM accounts`)),
+      email_configured: require("../services/notify").emailConfigured(),
+      sms_configured: require("../services/notify").smsConfigured(),
+      auth_secret_set: Boolean(process.env.AUTH_SECRET),
+      codes_in_log: config.auth.logCodes,
+      admin_token_retired: !config.auth.adminTokenBreakGlass,
+      admin_token_break_glass: config.auth.adminTokenBreakGlass,
+      sms_country_codes: config.auth.smsCountryCodes,
+    },
   });
 });
 

@@ -27,7 +27,7 @@
     <h1>BLST API</h1>
     <div class="card">
       <p>Base URL <code>/api/v1</code>. JSON in and out. CORS is open, so browser apps on other domains can call it.</p>
-      <p><b>Auth:</b> reads are public. Writes need <code>Authorization: Bearer &lt;key&gt;</code>. <code>x-api-key</code> and <code>x-admin-token</code> are also accepted. Roles: <b>admin</b> can do everything, <b>scorekeeper</b> can run games, and <b>readonly</b> can use exports when <code>PUBLIC_EXPORTS=false</code>. Keys are created in Admin → API keys. <code>GET /me</code> shows the role of the current key.</p>
+      <p><b>Auth:</b> reads are public. Writes need <code>Authorization: Bearer &lt;key&gt;</code>. <code>x-api-key</code> and <code>x-admin-token</code> are also accepted. Roles: <b>admin</b> can do everything, <b>scorekeeper</b> can run games, and <b>readonly</b> can use exports when <code>PUBLIC_EXPORTS=false</code>. Keys are created in Admin → API keys. People sign in to accounts instead (below) and use the returned session token the same way. <code>GET /me</code> shows the role of the current key or session.</p>
       <p><b>Errors:</b> <code>{"error": "message"}</code> with a 4xx status (400 validation, 401/403 auth, 404, 409 conflict/state, 422 import rejected).</p>
     </div>
 
@@ -99,6 +99,10 @@
       <tr><td class="m">*</td><td><code>/integrations/leagueapps</code></td><td>Status; <code>POST …/sync {from_scratch?}</code>; <code>GET …/preview</code>; <code>PUT …/field-map</code>; <code>PUT /tournaments/:id/leagueapps {program_ids, registration_prefix?}</code></td></tr>
       <tr><td class="m">POST</td><td><code>/streams/check</code></td><td><code>{url}</code>: checks whether a player link may be embedded (reads X-Frame-Options / frame-ancestors only)</td></tr>
       <tr><td class="m">*</td><td><code>/admin/api-keys</code>, <code>/admin/webhooks</code></td><td>Manage keys and webhooks</td></tr>
+      <tr><td class="m">POST</td><td><code>/auth/signup</code>, <code>/auth/login</code>, <code>/auth/setup</code></td><td>Start a sign-up <code>{email, phone}</code>, sign-in <code>{email}</code> or first-admin setup <code>{setup_key, email, phone}</code>. Returns <code>{challenge_id, step: "email"}</code>; a code is emailed</td></tr>
+      <tr><td class="m">POST</td><td><code>/auth/verify</code></td><td><code>{challenge_id, code}</code>. After the email code → <code>{step: "sms"}</code> and a code is texted; after the SMS code → <code>{step: "done", token, account}</code>. <code>POST /auth/resend {challenge_id}</code>, <code>POST /auth/logout</code>, <code>GET /auth/status</code></td></tr>
+      <tr><td class="m">*</td><td><code>/account</code></td><td>Signed-in account: GET details; DELETE the account; <code>POST /account/phone {phone}</code> (email + SMS codes via <code>/auth/verify</code>); <code>POST /account/logout-all</code></td></tr>
+      <tr><td class="m">*</td><td><code>/admin/accounts</code></td><td>Admin: list; <code>PATCH /admin/accounts/:id {role, tournament_id, disabled}</code>; <code>POST …/:id/logout</code>; DELETE</td></tr>
       <tr><td class="m">POST</td><td><code>/tournaments/:id/factions/{link,sync-players,push}</code></td><td>BLPA Factions sync. <code>GET …/factions/preview</code> shows computed points</td></tr>
     </table>
     <p class="small">You can also POST a raw CSV body with <code>Content-Type: text/csv</code> to the import endpoints. Options then go in the query string.</p></div>

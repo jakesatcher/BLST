@@ -401,3 +401,22 @@ body.no-scroll { overflow: hidden; }
 .watch-delay { display: flex; gap: 14px; justify-content: space-between; align-items: center; flex-wrap: wrap; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
 .watch-delay > div:first-child { flex: 1; min-width: 240px; }
 .badge.watch { background: #d6263b; border-color: #d6263b; color: #fff; }
+
+/* Sign-in (email + text-message codes) */
+.signin label { display: flex; flex-direction: column; gap: 4px; font-weight: 600; }
+.signin input:not([type="checkbox"]) { width: 100%; font-size: 1.05rem; padding: 12px; }
+.signin .code-input { font-family: var(--mono); font-size: 1.8rem; letter-spacing: 0.4em; text-align: center; }
+.big-button { width: 100%; min-height: 48px; font-size: 1.05rem; }
+button.link { background: none; border: 0; padding: 6px 0; color: var(--accent); cursor: pointer; font: inherit; min-height: 0; box-shadow: none; }
+.steps-mini { display: flex; gap: 8px; }
+.steps-mini span { flex: 1; text-align: center; padding: 6px; border-radius: 999px; background: var(--surface-2); color: var(--muted); font-size: 0.85rem; font-weight: 600; }
+.steps-mini .now { background: var(--accent); color: var(--accent-ink); }
+.steps-mini .done { background: var(--good); color: #fff; }
+.auth-card { max-width: 520px; margin: 24px auto; }
+.auth-card details { margin-top: 14px; }
+.auth-card summary { cursor: pointer; color: var(--muted); }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.topbar .who a { display: inline-block; max-width: 24ch; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }

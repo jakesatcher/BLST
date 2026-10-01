@@ -4,7 +4,9 @@ const db = require("../db");
 const { HttpError } = require("../lib/http");
 const { failureCounter } = require("../lib/rateLimit");
 
-const RANK = { readonly: 1, scorekeeper: 2, admin: 3 };
+// "user" is a signed-in standard account: it can manage itself but has no
+// staff access, so it ranks below a read-only API key.
+const RANK = { user: 0, readonly: 1, scorekeeper: 2, admin: 3 };
 const MIN_ADMIN_TOKEN_LENGTH = 16;
 
 function hashKey(key) {
@@ -29,12 +31,15 @@ function extractToken(req) {
 const failures = failureCounter({ windowMs: 15 * 60 * 1000, max: config.rateLimits.authFailuresPer15Min });
 
 /**
- * Resolves the caller's role from ADMIN_TOKEN or a stored API key and
+ * Resolves the caller's role from a signed-in account session (email + SMS
+ * codes), ADMIN_TOKEN or a stored API key, and
  * attaches it as req.auth. Requests without credentials continue as
  * anonymous (public reads); requireRole() rejects them where needed.
  *
  * Fails closed: with no ADMIN_TOKEN configured nobody is an admin, unless
  * ALLOW_OPEN_DEV=true on a non-deployed machine (local development).
+ * Once an admin account exists, ADMIN_TOKEN no longer grants access (every
+ * admin must pass MFA) unless ADMIN_TOKEN_BREAK_GLASS=true.
  */
 async function authenticate(req, res, next) {
   req.auth = { role: null, via: null };
@@ -55,7 +60,26 @@ async function authenticate(req, res, next) {
     return next(new HttpError(429, `too many failed sign-in attempts; try again in ${Math.ceil(blockedFor / 60)} min`));
   }
 
+  const accounts = require("../services/accounts");
+  if (accounts.isSessionToken(token)) {
+    const a = await accounts.resolveSession(token);
+    if (a) {
+      req.auth = {
+        role: a.role, via: "session", accountId: a.id, sessionId: a.session_id, email: a.email,
+        tournamentId: a.role === "scorekeeper" ? a.tournament_id : null, actor: `account:${a.id}`,
+      };
+      return next();
+    }
+    failures.fail(req.ip);
+    req.auth = { role: null, via: "invalid" };
+    return next(new HttpError(401, "your session has expired; sign in again"));
+  }
+
   if (config.adminToken && safeEqual(token, config.adminToken)) {
+    if (!config.auth.adminTokenBreakGlass && (await accounts.adminAccountsExist())) {
+      req.auth = { role: null, via: "admin-token-retired" };
+      return next(new HttpError(401, "the admin password is retired now that admin accounts exist; sign in with your email"));
+    }
     req.auth = { role: "admin", via: "admin-token", actor: "admin-token" };
     return next();
   }
@@ -76,6 +100,12 @@ async function authenticate(req, res, next) {
 
 function hasRole(req, role) {
   return Boolean(req.auth && req.auth.role && RANK[req.auth.role] >= RANK[role]);
+}
+
+/** Routes for the signed-in account itself (not API keys). */
+function requireAccount(req, _res, next) {
+  if (req.auth && req.auth.via === "session") return next();
+  next(new HttpError(401, "sign in with your account first"));
 }
 
 function requireRole(role) {
@@ -102,5 +132,5 @@ function generateKey() {
 }
 
 module.exports = {
-  authenticate, requireRole, hasRole, assertTournamentScope, hashKey, generateKey, safeEqual, failures, MIN_ADMIN_TOKEN_LENGTH,
+  authenticate, requireRole, requireAccount, hasRole, assertTournamentScope, hashKey, generateKey, safeEqual, failures, MIN_ADMIN_TOKEN_LENGTH,
 };
