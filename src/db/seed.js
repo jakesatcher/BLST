@@ -1,6 +1,9 @@
 // Loads a demo tournament: 4 teams, full rosters, a round robin, two
 // finished games, and one game left live in the 2nd period.
 //   npm run seed            (does nothing if a "BLST Demo Cup" already exists)
+//   --if-enabled            only when SEED_DEMO=true (Heroku postdeploy, Railway start)
+//   --once                  never again after the first successful seed, even if
+//                           the demo was deleted (Railway runs this on every start)
 const db = require("./index");
 const control = require("../services/gameControl");
 
@@ -22,8 +25,14 @@ async function main() {
     return;
   }
   await db.migrate({ log: () => {} });
+  const once = process.argv.includes("--once");
+  if (once && (await db.one("SELECT 1 FROM integration_settings WHERE key = 'demo_seeded'"))) {
+    console.log("Demo data was already loaded once; skipping.");
+    return;
+  }
   const exists = await db.one("SELECT id FROM tournaments WHERE name = 'BLST Demo Cup'");
   if (exists) {
+    await db.query("INSERT INTO integration_settings (key, value) VALUES ('demo_seeded', to_jsonb(now())) ON CONFLICT (key) DO NOTHING");
     console.log(`Demo tournament already exists (id ${exists.id}); nothing to do.`);
     return;
   }
@@ -118,6 +127,7 @@ async function main() {
     { period: 2, home: true, type: "penalty", p: 5, vs: 0, clock: "13:10", extra: { infraction: "Roughing" } },
   ], { finish: false, periods: 2 });
   await control.clockAction(games[2].id, { action: "set", remaining_sec: 725 });
+  await db.query("INSERT INTO integration_settings (key, value) VALUES ('demo_seeded', to_jsonb(now())) ON CONFLICT (key) DO NOTHING");
   console.log(`Seeded "${t.name}" (tournament ${t.id}): 4 teams, ${n} players, ${games.length} games (2 final, 1 live).`);
 }
 

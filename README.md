@@ -57,6 +57,22 @@ npm test
 
 The suite covers the stat engine (penalty replay, PP/SH, GWG, goalie decisions, OT and shootout, standings) and a full API run-through. That run-through covers auth, the team-count selector, roster import, a live game, roster moves, historical import, exports, signed webhooks, SSE, and Factions sync against a mock that matches the real Factions endpoints.
 
+## Deploying to Railway
+
+Run BLST and BLPA Factions side by side in one Railway project with one command:
+
+```bash
+npm i -g @railway/cli && railway login
+scripts/railway-setup.sh
+```
+
+The script:
+- creates Postgres, a `factions` service and a `blst` service;
+- generates the secrets;
+- connects BLST to Factions over Railway's private network.
+
+See **[docs/RAILWAY.md](docs/RAILWAY.md)** for the dashboard steps and details.
+
 ## Deploying to Heroku (for testing)
 
 ### One click

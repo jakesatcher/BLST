@@ -22,7 +22,7 @@
     }
     return h("label", null, "Setup key",
       h("input", { name, type: "password", required: true, autocomplete: "off", placeholder: "The server's ADMIN_TOKEN" }),
-      h("span", { class: "small muted" }, "On Heroku: Settings → Reveal Config Vars → ADMIN_TOKEN. It works only until the first admin account exists."));
+      h("span", { class: "small muted" }, "Heroku: Settings → Reveal Config Vars. Railway: the service’s Variables tab. It works only until the first admin account exists."));
   }
 
   /**

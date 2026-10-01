@@ -2,15 +2,21 @@ require("dotenv").config({ quiet: true });
 
 const bool = (v, dflt) => (v === undefined || v === "" ? dflt : /^(1|true|yes|on)$/i.test(v));
 
-// DYNO is set on every Heroku dyno — same "are we deployed" signal the
-// BLPA Factions app uses.
-const deployed = Boolean(process.env.DYNO) || process.env.NODE_ENV === "production";
+// "Are we deployed?": DYNO is set on every Heroku dyno, RAILWAY_ENVIRONMENT_ID
+// on every Railway service (same signals the BLPA Factions app uses).
+const onHeroku = Boolean(process.env.DYNO);
+const onRailway = Boolean(process.env.RAILWAY_ENVIRONMENT_ID);
+const deployed = onHeroku || onRailway || process.env.NODE_ENV === "production";
 
 module.exports = {
   port: Number(process.env.PORT || 3000),
   deployed,
+  platform: onHeroku ? "heroku" : onRailway ? "railway" : deployed ? "production" : "local",
   databaseUrl: process.env.DATABASE_URL || "postgresql://blst:blst@localhost:5432/blst",
-  databaseSsl: bool(process.env.DATABASE_SSL, Boolean(process.env.DYNO)),
+  // Heroku Postgres requires TLS. Railway's private network (*.railway.internal)
+  // is already encrypted and its Postgres doesn't use TLS there; set
+  // DATABASE_SSL=true if you point at Railway's public proxy URL instead.
+  databaseSsl: bool(process.env.DATABASE_SSL, onHeroku),
   adminToken: process.env.ADMIN_TOKEN || "",
   publicExports: bool(process.env.PUBLIC_EXPORTS, true),
   // Local development only: with no ADMIN_TOKEN, writes are refused unless
@@ -39,7 +45,7 @@ module.exports = {
     logCodes: bool(process.env.AUTH_LOG_CODES, !deployed),
     // Host name for the WebOTP line in texts ("@blst.example.com #123456"),
     // which lets phones offer the code automatically. Optional.
-    appHost: (process.env.APP_HOST || process.env.HEROKU_APP_DEFAULT_DOMAIN_NAME || "").replace(/^https?:\/\//, "").replace(/\/.*$/, ""),
+    appHost: (process.env.APP_HOST || process.env.RAILWAY_PUBLIC_DOMAIN || process.env.HEROKU_APP_DEFAULT_DOMAIN_NAME || "").replace(/^https?:\/\//, "").replace(/\/.*$/, ""),
   },
   email: {
     smtpUrl: process.env.SMTP_URL || "",

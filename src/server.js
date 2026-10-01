@@ -18,7 +18,7 @@ async function main() {
   await db.migrate();
   const accounts = require("./services/accounts");
   if (config.deployed && !config.adminToken && (await accounts.setupStatus()).needed) {
-    throw new Error("ADMIN_TOKEN must be set before deploying, to create the first admin account (heroku config:set ADMIN_TOKEN=...)");
+    throw new Error("ADMIN_TOKEN must be set before deploying, to create the first admin account (Heroku: heroku config:set ADMIN_TOKEN=...; Railway: railway variable set ADMIN_TOKEN=...)");
   }
   if (config.deployed && !process.env.AUTH_SECRET) console.warn("AUTH_SECRET is not set: sign-in codes in progress are lost on restart. Set it with: openssl rand -hex 32");
   if (config.deployed && config.auth.logCodes) console.warn("AUTH_LOG_CODES=true on a deployed server: sign-in codes are written to the log.");
