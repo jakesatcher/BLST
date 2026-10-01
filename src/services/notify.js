@@ -29,6 +29,28 @@ function describeEmail() {
   return "not set up (codes go to this log)";
 }
 
+/**
+ * SMTP_URL parsed here (never by nodemailer's legacy URL parser, which
+ * prints the whole URL, password included, to the log when it's malformed).
+ */
+function smtpOptions() {
+  let u;
+  try {
+    u = new URL(config.email.smtpUrl);
+  } catch {
+    u = null;
+  }
+  if (!u || !/^smtps?:$/.test(u.protocol) || !u.hostname || u.hostname.startsWith("re_")) {
+    console.error("email send failed: SMTP_URL isn't valid. Use smtps://USER:PASSWORD@HOST:465 (for Resend: smtps://resend:re_KEY@smtp.resend.com:465), or set RESEND_API_KEY instead.");
+    throw new HttpError(503, "Email sending isn't set up correctly on this server. Ask the site admin.");
+  }
+  const port = Number(u.port) || (u.protocol === "smtps:" ? 465 : 587);
+  return {
+    host: u.hostname, port, secure: u.protocol === "smtps:" || port === 465,
+    auth: u.username ? { user: decodeURIComponent(u.username), pass: decodeURIComponent(u.password) } : undefined,
+  };
+}
+
 async function sendViaResend(to, subject, text) {
   let res;
   try {
@@ -72,7 +94,7 @@ function devDeliver(channel, to, text) {
 async function sendEmail(to, subject, text) {
   if (!emailConfigured()) return devDeliver("email", to, `${subject}\n${text}`);
   if (config.email.resendApiKey) return sendViaResend(to, subject, text);
-  if (!transport) transport = require("nodemailer").createTransport(config.email.smtpUrl);
+  if (!transport) transport = require("nodemailer").createTransport(smtpOptions());
   try {
     await transport.sendMail({ from: config.email.from, to, subject, text });
     console.log(`email sent via SMTP to ${maskTo(to)}`);
