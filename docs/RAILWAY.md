@@ -87,6 +87,19 @@ logs then say **No database is connected** (older versions crashed with
 
 Make sure the app and the database are in the same project and environment.
 
+**Still `ECONNREFUSED 127.0.0.1:5432`, or "DATABASE_URL points at localhost"?**
+`DATABASE_URL` holds a local-development value, often because Railway's
+**Suggested Variables** (read from `.env.example`) were added. In the app
+service's **Variables** tab:
+- set `DATABASE_URL` to `${{Postgres.DATABASE_URL}}` (not
+  `postgresql://blst:blst@localhost...`);
+- delete `PORT` if it says `3000` (Railway sets the port itself);
+- check the Postgres service is really named `Postgres`; otherwise use its name
+  in the reference.
+
+The deploy log prints `Database: <host>:5432/railway` when it's right; the host
+ends in `.railway.internal`.
+
 ## After deploying
 
 Sign-in codes are written to the `blst` logs until email and text messages are

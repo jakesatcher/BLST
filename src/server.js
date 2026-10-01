@@ -48,6 +48,17 @@ async function main() {
   });
 }
 
+/** Where DATABASE_URL points, for the log (never the password). */
+function databaseTarget() {
+  try {
+    const u = new URL(config.databaseUrl);
+    return { host: u.hostname.replace(/^\[|\]$/g, ""), port: u.port || "5432", db: u.pathname.slice(1) };
+  } catch {
+    return { host: "", port: "", db: "" };
+  }
+}
+const LOCAL_HOSTS = new Set(["", "localhost", "127.0.0.1", "::1", "0.0.0.0"]);
+
 const NO_DATABASE = `No database is connected, so BLST can't start.
 
 Railway: add a database (New -> Database -> PostgreSQL) to this project, then
@@ -63,18 +74,27 @@ Elsewhere: set DATABASE_URL to a Postgres connection string.`;
  * added): instead of crash-looping, serve a page that says what to do and
  * repeat it in the log.
  */
-function explainMissingDatabase() {
-  console.error(NO_DATABASE);
-  setInterval(() => console.error(NO_DATABASE), 5 * 60e3);
+function explainMissingDatabase(why) {
+  const text = why ? `${why}\n\n${NO_DATABASE}` : NO_DATABASE;
+  console.error(text);
+  setInterval(() => console.error(text), 5 * 60e3);
   require("http").createServer((req, res) => {
     res.writeHead(503, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
-    res.end(`${NO_DATABASE}\n`);
+    res.end(`${text}\n`);
   }).listen(config.port, () => console.error(`Serving setup instructions on port ${config.port} until a database is connected.`));
 }
 
+const target = databaseTarget();
 if (!config.databaseUrl) {
   explainMissingDatabase();
+} else if (config.deployed && LOCAL_HOSTS.has(target.host)) {
+  // A deployed app's database is never on its own container. This is a
+  // local-development value (e.g. added from Railway's suggested variables)
+  // or a reference that didn't resolve.
+  explainMissingDatabase(`DATABASE_URL points at "${target.host || "(no host)"}", which is this container, not your database. ` +
+    "Replace it with the reference ${{Postgres.DATABASE_URL}} (and delete PORT=3000 if it was added with it).");
 } else {
+  if (config.deployed) console.log(`Database: ${target.host}:${target.port}/${target.db}`);
   main().catch((err) => {
     console.error(err);
     if (err.code === "ECONNREFUSED" || err.code === "ENOTFOUND") {
