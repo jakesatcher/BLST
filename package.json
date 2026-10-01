@@ -9,7 +9,8 @@
     "migrate": "node src/db/migrate.js",
     "seed": "node src/db/seed.js",
     "test": "node --test --test-concurrency=1 \"test/*.test.js\"",
-    "sync:leagueapps": "node src/db/sync-leagueapps.js"
+    "sync:leagueapps": "node src/db/sync-leagueapps.js",
+    "railway": "bash scripts/railway-setup.sh"
   },
   "repository": {
     "type": "git",

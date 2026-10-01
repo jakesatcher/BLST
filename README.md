@@ -59,19 +59,13 @@ The suite covers the stat engine (penalty replay, PP/SH, GWG, goalie decisions, 
 
 ## Deploying to Railway
 
-Run BLST and BLPA Factions side by side in one Railway project with one command:
+BLST and BLPA Factions deploy together into one Railway project with one command (from this repo or the Factions repo):
 
 ```bash
-npm i -g @railway/cli && railway login
-scripts/railway-setup.sh
+npm run railway
 ```
 
-The script:
-- creates Postgres, a `factions` service and a `blst` service;
-- generates the secrets;
-- connects BLST to Factions over Railway's private network.
-
-See **[docs/RAILWAY.md](docs/RAILWAY.md)** for the dashboard steps and details.
+Let Railway's GitHub app read both repos first. **[docs/RAILWAY.md](docs/RAILWAY.md)** has the details.
 
 ## Deploying to Heroku (for testing)
 
