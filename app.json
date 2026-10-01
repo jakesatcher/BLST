@@ -64,6 +64,26 @@
       "description": "Optional: comma-separated websites allowed to call the API from a browser. * = any (default).",
       "value": "*",
       "required": false
+    },
+    "LEAGUEAPPS_SITE_ID": {
+      "description": "Optional: your LeagueApps site id (registration sync).",
+      "value": "",
+      "required": false
+    },
+    "LEAGUEAPPS_CLIENT_ID": {
+      "description": "Optional: LeagueApps Private API key client id.",
+      "value": "",
+      "required": false
+    },
+    "LEAGUEAPPS_PRIVATE_KEY": {
+      "description": "Optional: PEM private key from the LeagueApps .p12 (openssl pkcs12 -nodes -legacy -in <id>.p12 -out <id>.pem).",
+      "value": "",
+      "required": false
+    },
+    "LEAGUEAPPS_SYNC_INTERVAL_MIN": {
+      "description": "Optional: sync LeagueApps registrations every N minutes (0 = only when you press Sync now).",
+      "value": "0",
+      "required": false
     }
   },
   "scripts": {

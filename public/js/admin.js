@@ -110,7 +110,7 @@
     if (!selectedTid) return mount(body, newTournamentForm());
     const t = await get(`/tournaments/${selectedTid}`);
     const sub = h("div");
-    const subTabs = tabs([["teams", "Teams & rosters"], ["schedule", "Schedule"], ["import", "Draft / roster upload"], ["streams", "Streams"], ["moves", "Moves"], ["settings", "Settings"], ["factions", "Factions sync"]],
+    const subTabs = tabs([["registrations", "Registrations"], ["teams", "Teams & rosters"], ["schedule", "Schedule"], ["import", "Draft / roster upload"], ["streams", "Streams"], ["moves", "Moves"], ["settings", "Settings"], ["factions", "Factions sync"]],
       (s) => tournamentSub(s, t, sub), "teams", { size: "medium" });
     const checklist = h("div");
     mount(body, checklist, subTabs.el, sub);
@@ -184,6 +184,7 @@
       if (tab === "import") rosterImportView(t, el);
       if (tab === "moves") await movesView(t, el);
       if (tab === "streams") await streamsView(t, el);
+      if (tab === "registrations") await registrationsView(t, el);
       if (tab === "settings") settingsView(t, el);
       if (tab === "factions") await factionsView(t, el);
     } catch (err) {
@@ -473,6 +474,7 @@
           r.removed && r.removed.length ? pill(`${r.removed.length} coming off rosters`, "bad") : "",
           r.created_teams ? pill(`${r.created_teams} new team${r.created_teams === 1 ? "" : "s"}`, "good") : "",
           r.skipped_blank ? pill(`${r.skipped_blank} blank line${r.skipped_blank === 1 ? "" : "s"} skipped`) : "",
+          r.unassigned && r.unassigned.length ? pill(`${r.unassigned.length} not on a team`, "pp") : "",
           errors.length ? pill(`${errors.length} problem${errors.length === 1 ? "" : "s"}`, "bad") : pill("no problems", "good")),
         errors.length ? h("div", { class: "notice error", style: { marginBottom: "12px" } },
           h("strong", null, skip.checked ? "These rows will be skipped:" : "Fix these in your file and choose it again (or tick “skip rows with problems”):"),
@@ -539,6 +541,171 @@
           h("label", { class: "inline" }, createTeams, "Create teams that don't exist yet"),
           h("label", { class: "inline" }, skip, "Skip rows with problems and import the rest"))),
       review));
+  }
+
+  /**
+   * Registrations: each player gets a code for this tournament; returning
+   * players are matched to their existing record (history, other events).
+   */
+  async function registrationsView(t, el) {
+    const [regs, la] = await Promise.all([get(`/tournaments/${t.id}/registrations`), get("/integrations/leagueapps").catch(() => null)]);
+    const refresh = () => tournamentSub("registrations", t, el);
+    const active = regs.filter((r) => r.status === "active");
+    const review = regs.filter((r) => r.needs_review);
+    const returning = active.filter((r) => r.has_history);
+    const pill = (text, cls) => h("span", { class: `badge ${cls || ""}` }, text);
+
+    const showResult = (r) => openSheet(`Registered: ${r.registration_code}`, h("div", { class: "stack" },
+      h("div", { style: { fontSize: "2.2rem", fontWeight: 900, fontFamily: "var(--mono)" } }, r.registration_code),
+      h("div", null, `${r.player.first_name} ${r.player.last_name} · player ${r.player.player_code}`),
+      r.history && r.history.has_history
+        ? h("p", { class: "notice" }, `Returning player: ${r.history.prior_tournaments} other tournament(s), ${r.history.historical_lines} imported stat line(s). Their stats carry over.`)
+        : h("p", { class: "muted" }, "New to BLST."),
+      r.needs_review ? h("p", { class: "notice error" }, r.review_note || "Check this match in the review list.") : ""),
+      (close) => [h("button", { class: "primary", onclick: () => { close(); refresh(); } }, "Done")]);
+
+    async function lookupSheet(code) {
+      try {
+        const l = await get(`/registrations/lookup?code=${encodeURIComponent(code)}`);
+        const p = l.player;
+        openSheet(`${p.first_name} ${p.last_name}`, h("div", { class: "stack" },
+          h("div", { class: "muted" }, `Player code ${p.player_code}${p.email ? ` · ${p.email}` : ""}${p.birth_date ? ` · born ${String(p.birth_date).slice(0, 10)}` : ""}`),
+          h("h3", null, "Tournaments"),
+          table([{ key: "registration_code", label: "Code" }, { key: "tournament", label: "Tournament" }, { key: "status", label: "Status" },
+            { key: "team", label: "Team", fmt: (x) => (x.team ? `${x.team}${x.jersey_number != null ? ` #${x.jersey_number}` : ""}` : "—") }], l.registrations),
+          h("h3", null, "Imported history"),
+          l.historical_stats.length ? table([{ key: "season", label: "Season" }, { key: "event_name", label: "Event" }, { key: "gp", label: "GP", num: true },
+            { key: "goals", label: "G", num: true }, { key: "assists", label: "A", num: true }], l.historical_stats) : h("p", { class: "muted" }, "None"),
+          h("a", { href: `/player.html?id=${p.id}`, target: "_blank" }, "Career stats page ↗")),
+          (close) => [h("button", { onclick: () => close() }, "Close")]);
+      } catch (err) {
+        toast(err.message, true);
+      }
+    }
+
+    async function mergeSheet(r) {
+      const sameName = (await get(`/players?q=${encodeURIComponent(r.last_name)}&limit=50`)).filter((p) => p.id !== r.player_id);
+      if (!sameName.length) return toast("No other players with that last name to merge with", true);
+      const v = await formSheet(`Merge ${r.first_name} ${r.last_name} (${r.player_code})`, [
+        { name: "keep", label: "This registration is really the same person as…", type: "select", required: true,
+          options: sameName.map((p) => [p.id, `${p.first_name} ${p.last_name} · ${p.player_code}${p.position ? ` · ${p.position}` : ""}`]) },
+      ], { submitLabel: "Merge", danger: true, intro: "Everything on this player (registrations, rosters, stats, history) moves to the person you pick, and this duplicate record is deleted. Registration codes stay the same." });
+      if (!v) return;
+      await run(() => api("POST", `/players/${v.keep}/merge`, { from_player_id: r.player_id }), "Merged");
+      refresh();
+    }
+
+    // ---- LeagueApps card
+    let laCard;
+    if (!la || !la.configured) {
+      laCard = h("div", { class: "card" }, h("h2", null, "LeagueApps"),
+        h("p", { class: "muted" }, "Not connected yet. Ask LeagueApps for a Private API key (Admin Dashboard → Connect → API Settings), then set LEAGUEAPPS_SITE_ID, LEAGUEAPPS_CLIENT_ID and LEAGUEAPPS_PRIVATE_KEY on the server (see README). Until then, export the Registrations Report from LeagueApps as CSV and import it below; it gets the same codes and matching."));
+    } else {
+      const linked = new Set((t.leagueapps_program_ids || []).map(String));
+      const boxes = la.programs.map((p) => {
+        const other = (p.tournaments || []).filter((x) => x.id !== t.id);
+        return h("label", { class: "inline" }, h("input", { type: "checkbox", value: p.program_id, checked: linked.has(String(p.program_id)) }),
+          `${p.name || "Program"} (#${p.program_id}) · last registration activity ${fmtDate(p.last_seen_at, { month: "short", day: "numeric" })}`, other.length ? h("span", { class: "muted small" }, ` · also linked to ${other.map((x) => x.name).join(", ")}`) : "");
+      });
+      const prefix = input("prefix", { value: t.registration_prefix || "", placeholder: "auto, e.g. FC26", maxlength: 12, style: { width: "140px" } });
+      const last = la.last_result;
+      laCard = h("div", { class: "card" }, h("div", { class: "row between" }, h("h2", { style: { margin: 0 } }, "LeagueApps"),
+          h("span", { class: "muted small" }, la.last_run_at ? `Last sync ${fmtDate(la.last_run_at)}${la.auto_sync_minutes ? ` · auto every ${la.auto_sync_minutes} min` : ""}` : "Never synced")),
+        last ? h("p", { class: "small muted" }, `Last run: ${last.seen} records, ${last.created} new, ${last.updated} updated, ${last.returning} returning, ${last.needs_review} to review, ${last.skipped_unlinked} from other programs${last.errors?.length ? `, ${last.errors.length} errors` : ""}.`) : "",
+        h("h3", null, "Programs that feed this tournament"),
+        boxes.length ? h("div", { class: "stack" }, boxes) : h("p", { class: "muted small" }, "No programs seen yet: run a sync first, then tick this tournament's program(s)."),
+        h("div", { class: "row", style: { marginTop: "10px" } }, field("Registration code prefix", prefix),
+          h("button", { class: "primary", onclick: async () => {
+            const ids = boxes.map((b) => b.querySelector("input")).filter((i) => i.checked).map((i) => i.value);
+            await run(() => api("PUT", `/tournaments/${t.id}/leagueapps`, { program_ids: ids, registration_prefix: prefix.value.trim().toUpperCase() || undefined }), "Saved. Sync to pull registrations");
+            t.leagueapps_program_ids = ids;
+          } }, "Save links")),
+        h("div", { class: "row", style: { marginTop: "12px" } },
+          h("button", { class: "primary", onclick: async () => {
+            const s = await run(() => api("POST", "/integrations/leagueapps/sync", {}));
+            toast(`${s.created} new, ${s.updated} updated, ${s.returning} returning players`);
+            refresh();
+          } }, "Sync now"),
+          h("button", { onclick: async () => {
+            try {
+              const pv = await get("/integrations/leagueapps/preview");
+              const inputs = {};
+              openSheet("LeagueApps field check", h("div", { class: "stack" },
+                h("p", { class: "muted small" }, `Fields in your registrations: ${pv.record_fields.join(", ")}`),
+                pv.mapped[0] ? table(Object.keys(pv.candidates).map((f) => ({ f, from: pv.mapped[0].sources[f], value: pv.mapped[0].record[f] })),
+                  [{ key: "f", label: "BLST field" }, { key: "from", label: "Read from", fmt: (x) => x.from || h("span", { style: { color: "var(--danger)" } }, "not found") },
+                   { key: "value", label: "First record", fmt: (x) => (x.value == null ? "" : String(x.value)) },
+                   { key: "o", label: "Override", sort: false, fmt: (x) => (inputs[x.f] = h("input", { value: pv.override[x.f] || "", placeholder: "field name", style: { width: "140px" } })) }])
+                  : h("p", null, "No registrations returned yet.")),
+                (close) => [h("button", { onclick: () => close() }, "Close"), h("button", { class: "primary", onclick: async () => {
+                  const map = Object.fromEntries(Object.entries(inputs).map(([k, i]) => [k, i.value.trim()]).filter(([, v]) => v));
+                  await run(() => api("PUT", "/integrations/leagueapps/field-map", { map }), "Field mapping saved");
+                  close();
+                } }, "Save overrides")]);
+            } catch (err) {
+              toast(err.message, true);
+            }
+          } }, "Check field mapping")));
+    }
+
+    // ---- walk-up + CSV
+    const walkForm = h("form", { class: "form", onsubmit: async (e) => {
+      e.preventDefault();
+      const r = await run(() => api("POST", `/tournaments/${t.id}/registrations`, values(e.target)));
+      e.target.reset();
+      showResult(r);
+    } },
+      field("First name", input("first_name", { required: true })), field("Last name", input("last_name", { required: true })),
+      field("Email", input("email", { type: "email" })), field("Birth date", input("birth_date", { type: "date" })),
+      field("Position", select("position", [["", "—"], "C", "LW", "RW", "F", "D", "G"], "")),
+      h("div", null, h("button", { class: "primary" }, "Register")));
+    const csvArea = h("textarea", { placeholder: "First Name,Last Name,Email,Birth Date\nPat,Puck,pat@example.com,3/14/2001", style: { minHeight: "90px" } });
+    const csvOut = h("div");
+    const csvGo = async (dry) => {
+      try {
+        const r = await api("POST", `/tournaments/${t.id}/registrations/import`, { ...importPayload(csvArea.value, {}), dry_run: dry });
+        mount(csvOut, h("div", { class: `notice ${r.errors.length ? "error" : ""}`, style: { marginTop: "8px" } },
+          `${dry ? "Dry run" : "Imported"}: ${r.created} new, ${r.updated} already registered, ${r.returning} returning, ${r.needs_review} to review${r.errors.length ? `, ${r.errors.length} errors: ${r.errors.slice(0, 5).map((e) => `line ${e.row}: ${e.error}`).join("; ")}` : ""}`));
+        if (!dry) refresh();
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+    const lookupInput = input("code", { placeholder: "Registration or player code", style: { textTransform: "uppercase" } });
+
+    mount(el,
+      h("div", { class: "summary-pills" }, pill(`${active.length} registered`), pill(`${returning.length} returning`, "good"),
+        review.length ? pill(`${review.length} to review`, "bad") : pill("nothing to review", "good"),
+        pill(`${regs.filter((r) => r.status === "waitlist").length} waitlist`), pill(`${regs.filter((r) => r.status === "cancelled").length} cancelled`)),
+      h("div", { class: "card" }, h("div", { class: "row" }, h("strong", null, "Look up a code"), lookupInput,
+        h("button", { onclick: () => lookupInput.value.trim() && lookupSheet(lookupInput.value.trim()) }, "Look up"),
+        h("span", { class: "spacer" }),
+        h("button", { onclick: () => BLST.downloadAuthed(`/tournaments/${t.id}/roster.csv?template=1`, "draft-sheet.csv").catch((e) => toast(e.message, true)) }, "Download draft sheet"))),
+      laCard,
+      h("div", { class: "grid two" },
+        h("div", { class: "card" }, h("h2", null, "Walk-up registration"), walkForm),
+        h("div", { class: "card" }, h("h2", null, "Import registrations (CSV)"),
+          h("p", { class: "muted small" }, "LeagueApps → Reports → Registrations → Export CSV, or any sheet with first/last name, email and birth date."),
+          h("div", { class: "row", style: { marginBottom: "6px" } }, fileLoader(csvArea)), csvArea,
+          h("div", { class: "row", style: { marginTop: "8px" } }, h("button", { onclick: () => csvGo(true) }, "Dry run"), h("button", { class: "primary", onclick: () => csvGo(false) }, "Import")),
+          csvOut)),
+      h("div", { class: "card" }, h("h2", null, "Registered players"),
+        h("p", { class: "muted small" }, "Matched automatically by LeagueApps user ID, email + first name, or name + birth date. Name-only or ambiguous matches are flagged: confirm them, or merge duplicates."),
+        table([
+          { key: "registration_code", label: "Code", fmt: (r) => h("a", { href: "#", onclick: (e) => { e.preventDefault(); lookupSheet(r.registration_code); } }, h("strong", { class: "mono" }, r.registration_code)) },
+          { key: "last_name", label: "Player", fmt: (r) => h("span", null, `${r.first_name} ${r.last_name}`, h("div", { class: "muted small" }, r.player_code)) },
+          { key: "status", label: "Status", fmt: (r) => (r.status === "active" ? "" : h("span", { class: "badge" }, r.status)) },
+          { key: "has_history", label: "History", fmt: (r) => (r.has_history ? h("span", { class: "badge good" }, `Returning · ${r.prior_tournaments} event${r.prior_tournaments === 1 ? "" : "s"}${r.historical_gp ? ` · ${r.historical_gp} GP` : ""}`) : h("span", { class: "muted small" }, "new")) },
+          { key: "match_method", label: "Matched by", fmt: (r) => ({ leagueapps_user_id: "LeagueApps ID", email: "email", name_birth_date: "name + birth date", name: "name only", external_id: "external ID", new: "new player" })[r.match_method] || r.match_method },
+          { key: "team", label: "Team", fmt: (r) => (r.team ? `${r.team}${r.jersey_number != null ? ` #${r.jersey_number}` : ""}` : h("span", { class: "muted small" }, "undrafted")) },
+          { key: "needs_review", label: "", sort: false, fmt: (r) => h("div", { class: "actions" },
+            r.needs_review ? [h("span", { class: "badge bad", title: r.review_note || "" }, "review"),
+              h("button", { class: "sm", onclick: async () => { await run(() => api("PATCH", `/registrations/${r.id}`, { reviewed: true }), "Confirmed"); refresh(); } }, "OK")] : "",
+            h("button", { class: "sm", onclick: () => mergeSheet(r) }, "Merge…"),
+            r.status !== "cancelled"
+              ? h("button", { class: "sm danger", onclick: async () => { if (await confirmSheet(`Cancel ${r.first_name} ${r.last_name}'s registration (${r.registration_code})?`, { title: "Cancel registration", confirmLabel: "Cancel registration", danger: true })) { await run(() => api("PATCH", `/registrations/${r.id}`, { status: "cancelled" }), "Cancelled"); refresh(); } } }, "Cancel")
+              : h("button", { class: "sm", onclick: async () => { await run(() => api("PATCH", `/registrations/${r.id}`, { status: "active" }), "Restored"); refresh(); } }, "Restore")) },
+        ], regs, { sortKey: "registration_code", sortDir: 1, rowClass: (r) => (r.status === "cancelled" ? "voided" : null) })));
   }
 
   /** Rink → video links, plus per-game watch / OBS overlay links. */

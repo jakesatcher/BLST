@@ -47,7 +47,7 @@ test.after(async () => {
 });
 
 test("API5 / A01: every write route rejects anonymous callers", async () => {
-  const modules = ["media", "streams", "tournaments", "players", "games", "importExport", "admin"];
+  const modules = ["media", "streams", "tournaments", "players", "games", "importExport", "registrations", "admin"];
   const checked = [];
   for (const m of modules) {
     const router = require(`../src/routes/${m}`);

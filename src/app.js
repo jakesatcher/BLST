@@ -66,6 +66,7 @@ function createApp() {
   // Body size limits: large uploads only where they're needed.
   const big = { limit: "10mb" };
   app.use("/api/v1/import", express.json(big), express.text({ type: ["text/csv", "text/plain"], ...big }));
+  app.use(/^\/api\/v1\/tournaments\/\d+\/registrations\/import$/, express.json(big), express.text({ type: ["text/csv", "text/plain"], ...big }));
   app.use(express.json({ limit: "1mb" }));
   app.use(express.text({ type: ["text/csv", "text/plain"], limit: "1mb" }));
   // A raw CSV body is accepted anywhere JSON { csv } is.
@@ -101,6 +102,7 @@ function createApp() {
   api.use(require("./routes/games"));
   api.use(require("./routes/stream"));
   api.use(require("./routes/importExport"));
+  api.use(require("./routes/registrations"));
   api.use(require("./routes/admin"));
   api.use((_req, _res, next) => next(new HttpError(404, "not found")));
   app.use("/api/v1", api);

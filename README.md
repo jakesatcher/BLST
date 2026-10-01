@@ -110,6 +110,36 @@ Admin → Tournaments → **Draft / roster upload**:
    - Players whose team changed are logged under **Moves**.
    - Games already played keep their original lineups.
 
+## Registrations and LeagueApps
+
+Every player who registers for a tournament gets a **registration code** for that tournament, such as `FC26-0042`. The prefix comes from the tournament's initials and year and can be changed. Every person also has one permanent **player code** (`BLP-000123`) that follows them across tournaments.
+
+**Returning players are recognized automatically.** Each new registration is checked against existing players in this order:
+1. **LeagueApps user ID.**
+2. **Email**, but only when the first name also matches. Parents often register several kids under one email, so siblings are never merged on email alone.
+3. **Name + birth date.**
+4. **Name only:** linked, but flagged for review. If several players share the name, a new player is created and flagged, with the possible duplicates listed.
+
+A matched registration links to the player's existing record, so their imported history and earlier tournaments carry over to career stats. The registration list marks them **Returning** (other events, imported games played). Duplicates are fixed with **Merge…**, which moves rosters, stats, history and registrations onto one record and keeps the registration codes.
+
+**Admin & setup → Tournaments → Registrations** has:
+- **LeagueApps:** run **Sync now**, then tick which LeagueApps program(s) feed this tournament. Programs appear after the first sync. Registrations from other programs are skipped, and cancellations come through as *cancelled*. **Check field mapping** shows the real field names in your LeagueApps data, and lets you override one if needed.
+- **Walk-up registration** and **CSV import** of the LeagueApps Registrations Report, for when API keys aren't set up yet. Both use the same codes and matching.
+- **Look up a code:** registration or player code → the person, their tournaments, teams and imported history. Scorekeepers get the same lookup as **Check-in** on the scorekeeper screen, without email or birth date.
+- **Download draft sheet:** the draft template pre-filled with every registered, undrafted player and their code. A `registration_code` column on the roster upload is the most reliable way to identify a player, and players left without a team are listed instead of failing the upload.
+
+**LeagueApps setup.** Get a **Private API key** in LeagueApps: Admin Dashboard → Connect → API Settings. Convert the `.p12` file it gives you:
+```bash
+openssl pkcs12 -nodes -legacy -in <client-id>.p12 -out <client-id>.pem
+```
+Then set `LEAGUEAPPS_SITE_ID`, `LEAGUEAPPS_CLIENT_ID` and `LEAGUEAPPS_PRIVATE_KEY` (the PEM contents). It's the same key setup as BLPA Factions. To sync on a schedule, either:
+- set `LEAGUEAPPS_SYNC_INTERVAL_MIN`, or
+- add Heroku Scheduler running `npm run sync:leagueapps`.
+
+The sync is incremental and safe to repeat.
+
+> The sign-in and export calls follow LeagueApps' official sample (`registrations-2`, `last-updated`/`last-id` paging, JWT sign-in). LeagueApps doesn't publish the registration record's field names, so use **Check field mapping** once with your real account before the first tournament.
+
 ## Live video with a score overlay (LiveBarn)
 
 Every game has a **▶ Watch** page (`/watch.html?game=N`) that shows the video with a broadcast-style score overlay drawn on top.

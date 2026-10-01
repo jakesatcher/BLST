@@ -16,6 +16,9 @@ function serialize(p, req) {
   const rest = { ...p };
   delete rest.email;
   delete rest.factions_player_id;
+  delete rest.birth_date;
+  delete rest.leagueapps_user_id;
+  delete rest.name_key;
   return rest;
 }
 

@@ -40,8 +40,26 @@
     const live = games.filter((g) => g.status === "live" || g.status === "intermission");
     const next = games.filter((g) => g.status === "scheduled");
     const done = games.filter((g) => g.status === "final");
+    const code = h("input", { placeholder: "Registration code", style: { textTransform: "uppercase", maxWidth: "220px" } });
+    const found = h("div");
+    const lookup = async () => {
+      if (!code.value.trim()) return;
+      try {
+        const l = await get(`/registrations/lookup?code=${encodeURIComponent(code.value.trim())}`);
+        const r = l.registration;
+        mount(found, h("div", { class: "notice", style: { marginTop: "8px" } },
+          h("strong", null, `${l.player.first_name} ${l.player.last_name}`), ` · ${l.player.player_code}`,
+          r ? h("div", null, `${r.registration_code}: ${r.status}`) : "",
+          h("div", { class: "small" }, l.registrations.map((x) => `${x.tournament}${x.team ? ` (${x.team}${x.jersey_number != null ? ` #${x.jersey_number}` : ""})` : ""}`).join(" · ")),
+          l.summary.has_history ? h("div", { class: "small" }, `Returning player: ${l.summary.prior_tournaments} other event(s), ${l.summary.historical_lines} imported stat line(s)`) : ""));
+      } catch (err) {
+        mount(found, h("p", { class: "notice error", style: { marginTop: "8px" } }, err.message));
+      }
+    };
+    code.addEventListener("keydown", (e) => e.key === "Enter" && lookup());
     mount(app,
       h("h1", null, "Pick a game to score"),
+      h("div", { class: "card" }, h("div", { class: "row" }, h("strong", null, "Check-in"), code, h("button", { onclick: lookup }, "Look up")), found),
       games.length ? [group("Live now", live), group("Up next", next), group("Finished (tap to correct)", done)]
         : h("div", { class: "card empty" }, "No live or upcoming games. An admin can schedule games in Admin → Tournaments → Schedule."));
   }

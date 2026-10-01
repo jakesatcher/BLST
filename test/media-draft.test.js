@@ -72,7 +72,7 @@ test("draft upload: template, preview, draft picks, blank lines", async () => {
   const tpl = await api("GET", `/tournaments/${S.tid}/roster.csv?template=1`);
   assert.equal(tpl.status, 200);
   const lines = tpl.body.trim().split(/\r?\n/);
-  assert.equal(lines[0], "team,number,first_name,last_name,position,role,email,round,pick,external_id");
+  assert.equal(lines[0], "team,number,first_name,last_name,position,role,email,round,pick,registration_code,external_id");
   assert.deepEqual(lines.slice(1).map((l) => l.split(",")[0]), ["North Stars", "South Paws"]);
   assert.equal((await api("GET", `/tournaments/${S.tid}/roster.csv`, undefined, null)).status, 401);
 

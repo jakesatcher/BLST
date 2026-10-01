@@ -4,6 +4,7 @@ const { createApp } = require("./app");
 const control = require("./services/gameControl");
 const webhooks = require("./services/webhooks");
 const factions = require("./services/factions");
+const leagueapps = require("./services/leagueapps");
 const { MIN_ADMIN_TOKEN_LENGTH } = require("./middleware/auth");
 
 // Same rule as the BLPA Factions app: never boot a deployed instance with
@@ -19,6 +20,7 @@ async function main() {
   await db.migrate();
   webhooks.start();
   factions.start();
+  leagueapps.startSchedule();
   const rearmed = await control.rearmAll();
   // Keep the audit trail for 180 days.
   const prune = () => db.query("DELETE FROM audit_log WHERE at < now() - interval '180 days'").catch(() => {});

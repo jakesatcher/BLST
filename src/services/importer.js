@@ -93,6 +93,22 @@ function splitName(row) {
  * Creates one when allowed and nothing matched.
  */
 async function resolvePlayer(c, row, { create, report }) {
+  // Registration / player codes are the most reliable identifiers.
+  const regCode = pick(row, ["registration_code", "reg_code", "registration", "code"]);
+  if (regCode) {
+    const r = await c.query(
+      "SELECT p.* FROM tournament_registrations tr JOIN players p ON p.id = tr.player_id WHERE upper(tr.registration_code) = upper($1)",
+      [regCode],
+    );
+    if (!r.rowCount) throw new Error(`no registration with code ${regCode}`);
+    return r.rows[0];
+  }
+  const playerCode = pick(row, ["player_code", "blst_player_code"]);
+  if (playerCode) {
+    const r = await c.query("SELECT * FROM players WHERE upper(player_code) = upper($1)", [playerCode]);
+    if (!r.rowCount) throw new Error(`no player with code ${playerCode}`);
+    return r.rows[0];
+  }
   const id = pick(row, ["player_id", "blst_id"]);
   if (id) {
     const r = await c.query("SELECT * FROM players WHERE id = $1", [Number(id)]);
@@ -171,6 +187,7 @@ async function runImport(body, perRow, finish) {
         const outcome = await perRow(client, rows[i], report, i + 2);
         await client.query("RELEASE SAVEPOINT row");
         if (outcome === "skip") report.skipped_blank = (report.skipped_blank || 0) + 1;
+        else if (outcome === "unassigned") report.unassigned_count = (report.unassigned_count || 0) + 1;
         else report.imported += 1;
       } catch (err) {
         await client.query("ROLLBACK TO SAVEPOINT row");
@@ -255,8 +272,15 @@ async function importRoster(tournamentId, body) {
 
   const perRow = async (c, row, rep, rowNum) => {
     const { first, last } = splitName(row);
-    const hasPlayer = first || last || pick(row, ["email", "e_mail", "email_address", "external_id", "player_id"]);
+    const hasPlayer = first || last || pick(row, ["email", "e_mail", "email_address", "external_id", "player_id", "registration_code", "reg_code", "player_code"]);
     if (!hasPlayer) return "skip";
+    // On the pre-filled draft sheet, players nobody drafted have no team:
+    // list them rather than failing the upload.
+    if (!pick(row, TEAM_ALIASES)) {
+      rep.unassigned = rep.unassigned || [];
+      rep.unassigned.push({ row: rowNum, name: [first, last].filter(Boolean).join(" ") || pick(row, ["registration_code", "reg_code", "player_code"]) });
+      return "unassigned";
+    }
 
     const player = await resolvePlayer(c, row, { create: true, report: rep });
     const playerName = `${player.first_name} ${player.last_name}`;
@@ -397,15 +421,28 @@ async function rosterCsv(tournamentId, { template = false } = {}) {
   const teams = await db.many("SELECT * FROM teams WHERE tournament_id = $1 ORDER BY seed NULLS LAST, name", [tournamentId]);
   const rows = template ? [] : await db.many(
     `SELECT tm.name AS team, re.jersey_number AS number, p.first_name, p.last_name, COALESCE(re.position, p.position) AS position,
-            re.role, p.email, re.draft_round AS round, re.draft_pick AS pick, p.external_id
+            re.role, p.email, re.draft_round AS round, re.draft_pick AS pick, tr.registration_code, p.external_id
        FROM roster_entries re JOIN players p ON p.id = re.player_id JOIN teams tm ON tm.id = re.team_id
+       LEFT JOIN tournament_registrations tr ON tr.player_id = p.id AND tr.tournament_id = re.tournament_id
       WHERE re.tournament_id = $1 ORDER BY tm.seed NULLS LAST, tm.name, re.jersey_number NULLS LAST, p.last_name`,
     [tournamentId],
   );
-  // A template is one blank line per team: fill in the players, add lines as needed.
-  const out = rows.length ? rows : teams.map((tm) => ({ team: tm.name }));
+  // The template is the draft sheet: every registered player not yet on a
+  // team (with their registration code), plus a blank line per team.
+  let out = rows;
+  if (!rows.length) {
+    const registered = await db.many(
+      `SELECT '' AS team, p.first_name, p.last_name, p.position, p.email, tr.registration_code
+         FROM tournament_registrations tr JOIN players p ON p.id = tr.player_id
+        WHERE tr.tournament_id = $1 AND tr.status = 'active'
+          AND NOT EXISTS (SELECT 1 FROM roster_entries re WHERE re.player_id = p.id AND re.tournament_id = tr.tournament_id)
+        ORDER BY p.last_name, p.first_name`,
+      [tournamentId],
+    );
+    out = [...registered, ...teams.map((tm) => ({ team: tm.name }))];
+  }
   const { toCsv } = require("../lib/csv");
-  return toCsv(out, ["team", "number", "first_name", "last_name", "position", "role", "email", "round", "pick", "external_id"]);
+  return toCsv(out, ["team", "number", "first_name", "last_name", "position", "role", "email", "round", "pick", "registration_code", "external_id"]);
 }
 
 module.exports = { importHistorical, importRoster, rosterCsv, splitName, parseMinutes };
