@@ -11,7 +11,18 @@ function createApp() {
   app.use(
     helmet({
       contentSecurityPolicy: {
-        directives: { "default-src": ["'self'"], "script-src": ["'self'"], "style-src": ["'self'", "'unsafe-inline'"], "img-src": ["'self'", "data:"] },
+        directives: {
+          "default-src": ["'self'"],
+          // hls.js (only loaded on the watch page, for HLS streams outside Safari).
+          "script-src": ["'self'", "https://cdn.jsdelivr.net"],
+          "style-src": ["'self'", "'unsafe-inline'"],
+          "img-src": ["'self'", "data:", "blob:"],
+          // Watch page: embedded players and video from the stream host.
+          "frame-src": ["'self'", "https:"],
+          "media-src": ["'self'", "https:", "blob:"],
+          "connect-src": ["'self'", "https:"],
+          "worker-src": ["'self'", "blob:"],
+        },
       },
     }),
   );
@@ -31,6 +42,7 @@ function createApp() {
   const api = express.Router();
   api.use(authenticate);
   api.use(require("./routes/media"));
+  api.use(require("./routes/streams"));
   api.use(require("./routes/tournaments"));
   api.use(require("./routes/players"));
   api.use(require("./routes/games"));

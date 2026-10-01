@@ -1,11 +1,12 @@
 const { Router } = require("express");
 const db = require("../db");
 const { requireRole } = require("../middleware/auth");
-const { badRequest, conflict, intParam, optEnum, optString, buildUpdate } = require("../lib/http");
+const { badRequest, conflict, intParam, optInt, optEnum, optString, buildUpdate } = require("../lib/http");
 const { emitDomain } = require("../lib/bus");
 const data = require("../services/data");
 const control = require("../services/gameControl");
 const { listGames } = require("./tournaments");
+const streams = require("../lib/streams");
 
 const router = Router();
 const admin = requireRole("admin");
@@ -56,6 +57,9 @@ router.patch("/games/:id", admin, async (req, res) => {
     scheduled_at: parseDate(req.body.scheduled_at, "scheduled_at"),
     venue: optString(req.body.venue, "venue"),
     game_type: optEnum(req.body.game_type, "game_type", GAME_TYPES),
+    stream_embed_url: streams.normalizeEmbedUrl(req.body.stream_embed_url),
+    livebarn_url: streams.normalizeLinkUrl(req.body.livebarn_url, "LiveBarn link"),
+    stream_delay_sec: optInt(req.body.stream_delay_sec, "stream_delay_sec", { min: 0, max: 300 }),
   };
   for (const side of ["home_team_id", "away_team_id"]) {
     if (req.body[side] === undefined) continue;

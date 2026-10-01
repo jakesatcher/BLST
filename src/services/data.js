@@ -2,6 +2,7 @@ const db = require("../db");
 const { notFound } = require("../lib/http");
 const clock = require("../lib/clock");
 const { computeGameStats, aggregatePlayerStats, computeStandings } = require("../lib/stats");
+const { resolveStream } = require("../lib/streams");
 
 const PUBLIC_PLAYER_COLS = "p.id, p.first_name, p.last_name, p.position, p.shoots, p.preferred_number, p.external_id, p.factions_order";
 
@@ -20,13 +21,16 @@ async function getGame(id, client = db) {
 /** Everything needed to compute one game's state. */
 async function loadGameBundle(gameId) {
   const game = await getGame(gameId);
-  const [tournament, teams, roster, events] = await Promise.all([
+  const [tournament, teams, roster, events, venueStream] = await Promise.all([
     getTournament(game.tournament_id),
     db.many("SELECT * FROM teams WHERE id = ANY($1)", [[game.home_team_id, game.away_team_id]]),
     loadGameRoster(game),
     db.many("SELECT * FROM game_events WHERE game_id = $1 ORDER BY period, elapsed_sec, id", [gameId]),
+    game.venue
+      ? db.one("SELECT * FROM venue_streams WHERE tournament_id = $1 AND lower(venue) = lower($2)", [game.tournament_id, game.venue])
+      : null,
   ]);
-  return { tournament, game, teams, roster, events };
+  return { tournament, game, teams, roster, events, stream: resolveStream(game, venueStream) };
 }
 
 /**
@@ -65,7 +69,7 @@ function teamPublic(team) {
 
 /** Public live state of a game, pushed to viewers over SSE. */
 function buildSnapshot(bundle, now = Date.now()) {
-  const { tournament: t, game, teams, roster, events } = bundle;
+  const { tournament: t, game, teams, roster, events, stream = null } = bundle;
   const stats = computeGameStats({ tournament: t, game, roster, events, now });
   const byId = new Map(roster.map((r) => [r.player_id, r]));
   const who = (id) => (id == null ? null : { id, name: playerLabel(byId.get(id)) || `Player ${id}`, number: byId.get(id)?.jersey_number ?? null });
@@ -113,6 +117,7 @@ function buildSnapshot(bundle, now = Date.now()) {
     },
     home: side(game.home_team_id),
     away: side(game.away_team_id),
+    stream,
     active_penalties: stats.penalties.active.map((p) => ({
       event_id: p.event_id,
       team_id: p.team_id,

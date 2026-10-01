@@ -1,0 +1,100 @@
+/* Scorebug overlay. Self-contained: used inside the watch page, a pop-out
+   window and overlay.html (OBS), so it doesn't rely on app.css. Sizes are in
+   container units, so the bug scales with the video it sits on. */
+
+.sb-root {
+  position: absolute; inset: 0; pointer-events: none; container-type: size;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #fff;
+  --k: 1; --gap: 2.2cqw;
+}
+.sb-root[data-size="s"] { --k: 0.78; }
+.sb-root[data-size="l"] { --k: 1.28; }
+.sb-root.sb-hidden { display: none; }
+
+.sb {
+  position: absolute; display: flex; flex-direction: column; filter: drop-shadow(0 0.4cqw 1.2cqw rgba(0, 0, 0, 0.55));
+  font-size: calc(var(--k) * clamp(10px, 2.1cqw, 34px)); line-height: 1;
+}
+.sb-root[data-pos="bl"] .sb { left: var(--gap); bottom: var(--gap); }
+.sb-root[data-pos="br"] .sb { right: var(--gap); bottom: var(--gap); }
+.sb-root[data-pos="tl"] .sb { left: var(--gap); top: var(--gap); }
+.sb-root[data-pos="tr"] .sb { right: var(--gap); top: var(--gap); }
+.sb-root[data-pos="top"] .sb { left: 50%; top: var(--gap); transform: translateX(-50%); }
+.sb-root[data-pos="bottom"] .sb { left: 50%; bottom: var(--gap); transform: translateX(-50%); }
+/* Pop-out window / Slide Over: the bug fills the window. */
+.sb-root[data-pos="fill"] { container-type: inline-size; position: relative; inset: auto; }
+.sb-root[data-pos="fill"] .sb { position: relative; font-size: calc(var(--k) * clamp(11px, 3.2cqw, 36px)); }
+.sb-root[data-pos="fill"] .sb-row { width: 100%; }
+.sb-root[data-pos="fill"] .sb-team { flex: 1; }
+
+.sb-row { display: flex; align-items: stretch; background: #0b1119; border-radius: 0.45em; overflow: hidden; }
+.sb-tlogo { width: 2.2em; height: 2.2em; object-fit: contain; padding: 0.2em; background: #fff; }
+.sb-tlogo[hidden] { display: none; }
+.sb-team {
+  display: flex; align-items: center; gap: 0.45em; padding: 0 0.55em 0 0; min-height: 2.2em;
+  background: linear-gradient(90deg, var(--c) 0 0.32em, #121a26 0.32em);
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+}
+.sb-chip {
+  width: 1.7em; height: 1.7em; margin-left: 0.55em; border-radius: 0.3em; background: var(--c);
+  display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 0.9em; overflow: hidden; flex: none;
+}
+.sb-chip img { width: 100%; height: 100%; object-fit: contain; background: rgba(255, 255, 255, 0.92); }
+.sb-chip img[hidden] { display: none; }
+.sb-abbr { font-weight: 800; letter-spacing: 0.04em; min-width: 2.6em; }
+.sb-score { font-weight: 900; font-size: 1.25em; min-width: 1.1em; text-align: right; font-variant-numeric: tabular-nums; }
+.sb-score.bump { animation: sb-bump 1.2s ease-out; }
+.sb-team.sb-pp .sb-abbr::after { content: "PP"; margin-left: 0.35em; font-size: 0.62em; padding: 0.12em 0.3em; border-radius: 0.2em; background: #ffd166; color: #111; vertical-align: 0.2em; }
+.sb-clock {
+  display: flex; align-items: center; gap: 0.5em; padding: 0 0.7em; background: #1d2736; font-weight: 800; white-space: nowrap;
+}
+.sb-per { color: #9fb0c6; font-size: 0.82em; letter-spacing: 0.06em; }
+.sb-time { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 1.12em; font-variant-numeric: tabular-nums; min-width: 3.1em; text-align: right; }
+.sb-clock.stopped .sb-time { color: #ffd166; }
+.sb-strip {
+  align-self: flex-start; margin-top: 0.18em; padding: 0.32em 0.7em; border-radius: 0.3em; background: rgba(11, 17, 25, 0.88);
+  font-size: 0.68em; font-weight: 800; letter-spacing: 0.06em; white-space: nowrap;
+}
+.sb-root[data-pos^="t"] .sb { flex-direction: column; }
+.sb-root[data-pos="br"] .sb-strip, .sb-root[data-pos="tr"] .sb-strip { align-self: flex-end; }
+.sb-root[data-pos="top"] .sb-strip, .sb-root[data-pos="bottom"] .sb-strip, .sb-root[data-pos="fill"] .sb-strip { align-self: center; }
+.sb-strip.pp, .sb-strip.en { background: var(--c, #b26a00); box-shadow: inset 0 0 0 999px rgba(0, 0, 0, 0.18); }
+.sb-strip.final { background: #fff; color: #0b1119; }
+.sb-strip[hidden] { display: none; }
+
+/* Goal / penalty / final banner: lower third, centered. */
+.sb-banner {
+  position: absolute; left: 50%; bottom: 14%; transform: translate(-50%, 40%) scale(0.96); opacity: 0;
+  display: flex; align-items: center; gap: 1em; padding: 0.7em 1.3em; border-radius: 0.5em; max-width: 86%;
+  background: linear-gradient(100deg, var(--c) 0%, color-mix(in srgb, var(--c) 70%, #000) 100%);
+  font-size: calc(var(--k) * clamp(12px, 2.4cqw, 38px)); box-shadow: 0 1em 2.5em rgba(0, 0, 0, 0.45);
+  transition: opacity 0.4s, transform 0.4s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+.sb-root[data-pos="fill"] .sb-banner { position: fixed; bottom: 4px; font-size: clamp(12px, 3.6vw, 26px); max-width: 96%; }
+.sb-banner.show { opacity: 1; transform: translate(-50%, 0) scale(1); }
+.sb-banner-logo { width: 3.2em; height: 3.2em; object-fit: contain; background: rgba(255, 255, 255, 0.92); border-radius: 0.4em; padding: 0.2em; flex: none; }
+.sb-banner-title { font-weight: 900; font-size: 1.7em; letter-spacing: 0.06em; line-height: 1; }
+.sb-banner.goal .sb-banner-title { font-size: 2.2em; animation: sb-pulse 0.9s ease-in-out 3; }
+.sb-banner-l1 { font-weight: 800; font-size: 1.05em; margin-top: 0.25em; }
+.sb-banner-l2 { font-size: 0.8em; opacity: 0.9; margin-top: 0.2em; }
+.sb-banner-score { margin-left: 0.6em; padding-left: 1em; border-left: 2px solid rgba(255, 255, 255, 0.4); font-weight: 900; font-size: 1.2em; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.sb-banner.pen { background: linear-gradient(100deg, #b26a00, #7a4800); }
+
+@keyframes sb-bump { 0% { color: #ffd166; transform: scale(1.6); } 100% { color: #fff; transform: scale(1); } }
+@keyframes sb-pulse { 50% { transform: scale(1.08); } }
+@media (prefers-reduced-motion: reduce) {
+  .sb-banner { transition: opacity 0.2s; }
+  .sb-score.bump, .sb-banner.goal .sb-banner-title { animation: none; }
+}
+
+/* Standalone pages (overlay.html, pop-out window) */
+body.sb-page { margin: 0; background: transparent; overflow: hidden; }
+body.sb-page.dark { background: #05080d; }
+body.sb-page.green { background: #00b140; }
+body.sb-page .sb-stage { position: fixed; inset: 0; }
+body.sb-page.fill { display: flex; align-items: center; padding: 8px; box-sizing: border-box; min-height: 100vh; }
+body.sb-page.fill .sb-stage { position: relative; inset: auto; width: 100%; }
+/* Keep banners clear of a bottom-placed scorebug. */
+.sb-root[data-pos="bl"] .sb-banner, .sb-root[data-pos="br"] .sb-banner, .sb-root[data-pos="bottom"] .sb-banner { bottom: 24%; }
+.sb-banner-text { min-width: 0; }
+.sb-banner-l1 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

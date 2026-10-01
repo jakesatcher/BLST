@@ -327,7 +327,7 @@
           { class: "meta" },
           h("span", null, statusBadge(g), " ",
             live ? h("span", { class: "mono", "data-clock": g.id }, `${periodLabel(g.period, g.periods || 3)} ${g.status === "intermission" ? "INT" : ""}`) : fmtDate(g.scheduled_at)),
-          h("span", null, showTournament ? g.tournament_name : g.venue || (g.game_type !== "pool" ? g.game_type : "")),
+          h("span", null, g.has_stream && g.status !== "final" ? [h("span", { class: "badge watch" }, "▶ Watch"), " "] : "", showTournament ? g.tournament_name : g.venue || (g.game_type !== "pool" ? g.game_type : "")),
         ),
       );
       return card;

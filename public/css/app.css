@@ -377,3 +377,27 @@ img.logo.xl { width: 96px; height: 96px; }
   .tabs.big, .tabs.medium { display: grid; grid-template-columns: repeat(2, 1fr); }
   .tabs.big button, .tabs.medium button { white-space: normal; border-radius: 12px; }
 }
+
+/* Watch page */
+.watch-stage {
+  position: relative; aspect-ratio: 16 / 9; width: min(100%, calc((100dvh - 230px) * 16 / 9)); min-width: min(100%, 320px);
+  margin: 0 auto 14px; background: #000; border-radius: 12px; overflow: hidden;
+}
+.watch-media, .watch-media iframe, .watch-media video { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #000; }
+.watch-overlay { position: absolute; inset: 0; pointer-events: none; }
+.watch-placeholder {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  padding: 6% 8% 18%; text-align: center; color: #dfe6ef;
+  background: radial-gradient(ellipse at 50% 35%, #1d2a3d 0%, #070b11 70%);
+}
+.watch-placeholder p { max-width: 520px; color: #9fb0c6; margin: 0 0 8px; }
+.watch-ph-title { font-size: clamp(1.1rem, 2.6vw, 1.6rem); font-weight: 800; }
+.watch-exit { display: none; position: absolute; top: max(10px, env(safe-area-inset-top)); right: 10px; z-index: 3; background: rgba(0, 0, 0, 0.6); color: #fff; border-color: rgba(255, 255, 255, 0.3); }
+.watch-stage:fullscreen, .watch-stage:-webkit-full-screen { width: 100vw; height: 100vh; aspect-ratio: auto; border-radius: 0; margin: 0; }
+.watch-stage.theater { position: fixed; inset: 0; z-index: 100; width: 100vw; height: 100dvh; aspect-ratio: auto; border-radius: 0; margin: 0; }
+.watch-stage.theater .watch-exit { display: inline-flex; }
+body.no-scroll { overflow: hidden; }
+.watch-controls .row label { min-width: 150px; }
+.watch-delay { display: flex; gap: 14px; justify-content: space-between; align-items: center; flex-wrap: wrap; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+.watch-delay > div:first-child { flex: 1; min-width: 240px; }
+.badge.watch { background: #d6263b; border-color: #d6263b; color: #fff; }

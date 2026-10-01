@@ -378,10 +378,13 @@ router.get("/tournaments/:id/games", async (req, res) => {
 async function listGames(where, params) {
   return db.many(
     `SELECT g.id, g.tournament_id, g.home_team_id, g.away_team_id, g.scheduled_at, g.venue, g.game_type, g.status,
+            g.stream_embed_url, g.livebarn_url, g.stream_delay_sec,
             g.period, g.clock_running, g.clock_remaining_ms, g.clock_started_at, g.home_score, g.away_score, g.decision,
             h.name AS home_team, h.short_name AS home_short, h.color AS home_color, h.logo_version AS home_logo,
             a.name AS away_team, a.short_name AS away_short, a.color AS away_color, a.logo_version AS away_logo,
-            t.name AS tournament_name, t.periods
+            t.name AS tournament_name, t.periods,
+            (g.stream_embed_url IS NOT NULL OR g.livebarn_url IS NOT NULL OR EXISTS (
+               SELECT 1 FROM venue_streams vs WHERE vs.tournament_id = g.tournament_id AND lower(vs.venue) = lower(g.venue))) AS has_stream
        FROM games g JOIN teams h ON h.id = g.home_team_id JOIN teams a ON a.id = g.away_team_id
        JOIN tournaments t ON t.id = g.tournament_id
       WHERE ${where} ORDER BY g.scheduled_at NULLS LAST, g.id`,

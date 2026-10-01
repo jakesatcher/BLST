@@ -110,7 +110,7 @@
     if (!selectedTid) return mount(body, newTournamentForm());
     const t = await get(`/tournaments/${selectedTid}`);
     const sub = h("div");
-    const subTabs = tabs([["teams", "Teams & rosters"], ["schedule", "Schedule"], ["import", "Draft / roster upload"], ["moves", "Moves"], ["settings", "Settings"], ["factions", "Factions sync"]],
+    const subTabs = tabs([["teams", "Teams & rosters"], ["schedule", "Schedule"], ["import", "Draft / roster upload"], ["streams", "Streams"], ["moves", "Moves"], ["settings", "Settings"], ["factions", "Factions sync"]],
       (s) => tournamentSub(s, t, sub), "teams", { size: "medium" });
     const checklist = h("div");
     mount(body, checklist, subTabs.el, sub);
@@ -183,6 +183,7 @@
       if (tab === "schedule") await scheduleView(t, el);
       if (tab === "import") rosterImportView(t, el);
       if (tab === "moves") await movesView(t, el);
+      if (tab === "streams") await streamsView(t, el);
       if (tab === "settings") settingsView(t, el);
       if (tab === "factions") await factionsView(t, el);
     } catch (err) {
@@ -397,6 +398,9 @@
                 { name: "scheduled_at", label: "Start time", type: "datetime", value: g.scheduled_at },
                 { name: "venue", label: "Rink", value: g.venue || "" },
                 { name: "game_type", label: "Type", type: "select", value: g.game_type, options: [["pool", "Pool play"], ["playoff", "Playoff"], ["final", "Final"], ["exhibition", "Exhibition"]] },
+                { name: "livebarn_url", label: "LiveBarn link for this game (optional)", value: g.livebarn_url || "", placeholder: "Leave blank to use the rink's link from Streams", type: "url" },
+                { name: "stream_embed_url", label: "Video embed for this game (optional)", value: g.stream_embed_url || "", placeholder: "YouTube Live, partner embed or .m3u8", type: "url" },
+                { name: "stream_delay_sec", label: "Stream delay, seconds (optional)", value: g.stream_delay_sec ?? "", type: "number", min: 0, max: 300 },
               ], { submitLabel: "Save" });
               if (!v) return;
               await run(() => api("PATCH", `/games/${g.id}`, v), "Game updated");
@@ -535,6 +539,81 @@
           h("label", { class: "inline" }, createTeams, "Create teams that don't exist yet"),
           h("label", { class: "inline" }, skip, "Skip rows with problems and import the rest"))),
       review));
+  }
+
+  /** Rink → video links, plus per-game watch / OBS overlay links. */
+  async function streamsView(t, el) {
+    const [data, games] = await Promise.all([get(`/tournaments/${t.id}/streams`), get(`/tournaments/${t.id}/games`)]);
+    const refresh = () => tournamentSub("streams", t, el);
+    const rinks = [...data.streams, ...data.unconfigured_venues.map((venue) => ({ venue, delay_sec: 20 }))];
+
+    const rinkCard = (r) => {
+      const lb = input("livebarn_url", { type: "url", value: r.livebarn_url || "", placeholder: "https://livebarn.com/en/video/…" });
+      const embed = input("embed_url", { type: "url", value: r.embed_url || "", placeholder: "YouTube Live, partner embed, or .m3u8 link", style: { flex: "1", minWidth: "0" } });
+      const delay = input("delay_sec", { type: "number", min: 0, max: 300, value: r.delay_sec ?? 20, style: { width: "110px" } });
+      const result = h("div", { class: "small" });
+      return h("div", { class: "card" },
+        h("div", { class: "row between" }, h("h3", { style: { margin: 0 } }, r.venue), r.id ? h("span", { class: "badge good" }, "set up") : h("span", { class: "badge" }, "not set up")),
+        h("div", { class: "stack", style: { marginTop: "10px" } },
+          field("LiveBarn link for this rink's camera", lb),
+          h("label", null, "Video embed (optional: plays right on BLST)", h("div", { class: "row" }, embed,
+            h("button", { type: "button", class: "sm", onclick: async () => {
+              if (!embed.value.trim()) return mount(result, h("span", { class: "muted" }, "Paste a link first."));
+              mount(result, h("span", { class: "muted" }, "Checking…"));
+              try {
+                const c = await api("POST", "/streams/check", { url: embed.value.trim() });
+                mount(result, h("span", { style: { color: c.embeddable === false ? "var(--danger)" : c.embeddable ? "var(--good)" : "var(--warn)" } },
+                  c.embeddable === false ? "✗ " : c.embeddable ? "✓ " : "? ", c.reason));
+              } catch (err) {
+                mount(result, h("span", { style: { color: "var(--danger)" } }, err.message));
+              }
+            } }, "Check")), result),
+          h("label", null, "Default stream delay (seconds)", delay, h("span", { class: "small muted" }, "How far the video runs behind live. LiveBarn is usually 15–30s; viewers can fine-tune it.")),
+          h("div", { class: "row" },
+            h("button", { class: "primary", onclick: async () => {
+              await run(() => api("PUT", `/tournaments/${t.id}/streams`, { venue: r.venue, livebarn_url: lb.value, embed_url: embed.value, delay_sec: delay.value === "" ? null : Number(delay.value) }), "Saved");
+              refresh();
+            } }, "Save"),
+            r.id ? h("button", { class: "danger", onclick: async () => {
+              if (!(await confirmSheet(`Remove the stream links for ${r.venue}?`, { title: "Remove stream", confirmLabel: "Remove", danger: true }))) return;
+              await run(() => api("DELETE", `/tournaments/${t.id}/streams/${r.id}`), "Removed");
+              refresh();
+            } }, "Remove") : "")));
+    };
+
+    const newVenue = input("venue", { placeholder: "Rink name, exactly as on the schedule (e.g. Rink A)" });
+    const grid = h("div", { class: "teamgrid" }, rinks.map(rinkCard));
+    mount(el,
+      h("div", { class: "card" }, h("h2", null, "Streams & live overlay"),
+        h("p", { class: "muted" }, "Viewers tap ▶ Watch on any game. If the rink has a video embed, the video plays on BLST with the live score overlay on top. If it only has a LiveBarn link, viewers open LiveBarn with their own subscription and BLST shows the live scorebug next to it (pop-out window on a computer, Split View on iPad)."),
+        h("p", { class: "muted small" }, "LiveBarn doesn't offer a public embed or API, and its pages can't be shown inside other sites. If LiveBarn gives BLPA an embed/partner player link for the tournament, paste it as the video embed and use Check. YouTube Live links (your own camera) work as-is.")),
+      rinks.length ? "" : h("p", { class: "muted" }, "No rinks yet. Give games a rink on the Schedule tab, or add one below."),
+      grid,
+      h("div", { class: "card", style: { marginTop: "16px" } }, h("h3", null, "Add a rink"),
+        h("div", { class: "row" }, newVenue, h("button", { onclick: () => {
+          const v = newVenue.value.trim();
+          if (!v) return;
+          grid.prepend(rinkCard({ venue: v, delay_sec: 20 }));
+          newVenue.value = "";
+        } }, "Add"))),
+      h("div", { class: "card" }, h("h2", null, "Per-game links"),
+        h("p", { class: "muted small" }, "Watch page for fans, and a transparent overlay for OBS / streaming software (Browser Source, 1920×1080). Per-game video overrides are in Schedule → Edit."),
+        table([
+          { key: "scheduled_at", label: "When", fmt: (g) => fmtDate(g.scheduled_at) },
+          { key: "m", label: "Game", sort: false, fmt: (g) => `${g.away_team} @ ${g.home_team}${g.venue ? ` · ${g.venue}` : ""}` },
+          { key: "has_stream", label: "Video", fmt: (g) => (g.has_stream ? "✓" : "—") },
+          { key: "x", label: "", sort: false, fmt: (g) => h("div", { class: "actions" },
+            h("a", { class: "btn sm", href: `/watch.html?game=${g.id}`, target: "_blank" }, "Watch"),
+            h("button", { class: "sm", onclick: async () => {
+              const url = `${location.origin}/overlay.html?game=${g.id}`;
+              try {
+                await navigator.clipboard.writeText(url);
+                toast("Overlay link copied");
+              } catch {
+                await formSheet("OBS overlay link", [{ name: "u", label: "Copy this link", value: url }], { submitLabel: "Done" });
+              }
+            } }, "Copy OBS link")) },
+        ], games, { sortKey: "scheduled_at", sortDir: 1 })));
   }
 
   async function movesView(t, el) {

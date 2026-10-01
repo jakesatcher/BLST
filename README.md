@@ -110,6 +110,33 @@ Admin → Tournaments → **Draft / roster upload**:
    - Players whose team changed are logged under **Moves**.
    - Games already played keep their original lineups.
 
+## Live video with a score overlay (LiveBarn)
+
+Every game has a **▶ Watch** page (`/watch.html?game=N`) that shows the video with a broadcast-style score overlay drawn on top.
+- **What the overlay shows:** team logos and score, period and clock, a power-play countdown, empty net, and shots.
+- **Animated banners** for goals (scorer and assists), penalties and the final score.
+
+Set it up under **Admin & setup → Tournaments → Streams**:
+- **LiveBarn link** for each rink's camera. LiveBarn has no public API or embeddable player, and its video needs each viewer's own subscription. So for LiveBarn rinks the Watch page offers:
+  - **Watch on LiveBarn**, which opens the rink in LiveBarn;
+  - **Pop out scorebug**, a small always-on-top live score window. It floats above other windows in Chrome/Edge and opens as a normal popup in other browsers;
+  - on **iPad**, the LiveBarn app full screen with the BLST scorebug in Split View or Slide Over (`/overlay.html?game=N&pos=fill&bg=dark`).
+- **Video embed (optional).** If you have a player link that can be embedded, paste it here and the video plays right on BLST with the overlay on top. That could be a LiveBarn partner/embed link for the tournament, YouTube Live from your own camera, or an `.m3u8`/`.mp4` stream. **Check** tells you whether the site allows embedding. Normal LiveBarn pages don't.
+- **Stream delay.** Video runs behind live scoring, about 15–30s on LiveBarn. The overlay holds every update back by this many seconds so it never spoils a goal. Viewers fine-tune it with ±1s/±5s, or tap **⚡ Sync to last goal** at the moment they see the goal on the video.
+- **Per-game overrides** (a different stream for one game) are under **Schedule → Edit**.
+
+**Broadcast overlay:** `/overlay.html?game=N` is a transparent 1920×1080 page for OBS or other streaming software (Browser Source). You can add these to the link:
+
+| Add to the link | Options |
+|---|---|
+| `&pos=` | `bl`, `br`, `tl`, `tr`, `top`, `bottom` |
+| `&size=` | `s`, `m`, `l` |
+| `&delay=` | seconds |
+| `&bg=green` | chroma-key background |
+| `&shots=0`, `&pens=0`, `&anim=0` | turn off shots, penalty banners, animations |
+
+Re-broadcasting LiveBarn video needs LiveBarn's permission. The overlay is meant for your own camera or a licensed feed.
+
 ## Using it on an iPad
 
 1. Open the app in Safari. Tap **Share → Add to Home Screen**. BLST then opens full-screen like an app, with its own icon.
