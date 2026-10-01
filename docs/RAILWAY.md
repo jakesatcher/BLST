@@ -72,6 +72,21 @@ Open the address it prints → **Admin & setup** → **Set up the admin account*
 4. **Settings → Networking → Generate Domain**, port `8080`.
 5. Copy the setup key from the **Deploy Logs**.
 
+### Deployed from GitHub and it crashed?
+
+Deploying the repo from GitHub creates only the app, with no database. The
+logs then say **No database is connected** (older versions crashed with
+`ECONNREFUSED ... 127.0.0.1:5432`). To fix it:
+
+1. In the project, **+ Create → Database → PostgreSQL**.
+2. In the app service's **Variables** tab, add
+   `DATABASE_URL` = `${{Postgres.DATABASE_URL}}` (type it exactly; Railway
+   fills in the real value. If your database service isn't called `Postgres`,
+   use its name).
+3. Railway redeploys. Look for the setup key in the **Deploy Logs**.
+
+Make sure the app and the database are in the same project and environment.
+
 ## After deploying
 
 Sign-in codes are written to the `blst` logs until email and text messages are

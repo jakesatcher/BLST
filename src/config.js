@@ -8,11 +8,29 @@ const onHeroku = Boolean(process.env.DYNO);
 const onRailway = Boolean(process.env.RAILWAY_ENVIRONMENT_ID);
 const deployed = onHeroku || onRailway || process.env.NODE_ENV === "production";
 
+/**
+ * The Postgres connection string: DATABASE_URL, else Railway's other
+ * Postgres variables (DATABASE_PRIVATE_URL, or PGHOST/PGUSER/... when the
+ * Postgres service's variables were shared), else localhost for development.
+ */
+function databaseUrl() {
+  const e = process.env;
+  const url = e.DATABASE_URL || e.DATABASE_PRIVATE_URL || e.DATABASE_PUBLIC_URL;
+  if (url) return url;
+  if (e.PGHOST && e.PGUSER) {
+    const auth = `${encodeURIComponent(e.PGUSER)}${e.PGPASSWORD ? `:${encodeURIComponent(e.PGPASSWORD)}` : ""}`;
+    return `postgresql://${auth}@${e.PGHOST}:${e.PGPORT || 5432}/${encodeURIComponent(e.PGDATABASE || e.PGUSER)}`;
+  }
+  return deployed ? "" : "postgresql://blst:blst@localhost:5432/blst";
+}
+
 module.exports = {
   port: Number(process.env.PORT || 3000),
   deployed,
   platform: onHeroku ? "heroku" : onRailway ? "railway" : deployed ? "production" : "local",
-  databaseUrl: process.env.DATABASE_URL || "postgresql://blst:blst@localhost:5432/blst",
+  // Deployed with no database connected, this is "" and the server explains
+  // how to connect one instead of trying localhost.
+  databaseUrl: databaseUrl(),
   // Heroku Postgres requires TLS. Railway's private network (*.railway.internal)
   // is already encrypted and its Postgres doesn't use TLS there; set
   // DATABASE_SSL=true if you point at Railway's public proxy URL instead.

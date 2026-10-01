@@ -48,7 +48,38 @@ async function main() {
   });
 }
 
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+const NO_DATABASE = `No database is connected, so BLST can't start.
+
+Railway: add a database (New -> Database -> PostgreSQL) to this project, then
+in this service's Variables tab add
+    DATABASE_URL = \${{Postgres.DATABASE_URL}}
+(the variable reference; "Postgres" is the database service's name). The
+service redeploys and starts. See docs/RAILWAY.md.
+
+Elsewhere: set DATABASE_URL to a Postgres connection string.`;
+
+/**
+ * Deployed without a database (e.g. a GitHub deploy before Postgres is
+ * added): instead of crash-looping, serve a page that says what to do and
+ * repeat it in the log.
+ */
+function explainMissingDatabase() {
+  console.error(NO_DATABASE);
+  setInterval(() => console.error(NO_DATABASE), 5 * 60e3);
+  require("http").createServer((req, res) => {
+    res.writeHead(503, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" });
+    res.end(`${NO_DATABASE}\n`);
+  }).listen(config.port, () => console.error(`Serving setup instructions on port ${config.port} until a database is connected.`));
+}
+
+if (!config.databaseUrl) {
+  explainMissingDatabase();
+} else {
+  main().catch((err) => {
+    console.error(err);
+    if (err.code === "ECONNREFUSED" || err.code === "ENOTFOUND") {
+      console.error(`Can't reach the database (${err.code}). Check DATABASE_URL points at your Postgres service (on Railway: \${{Postgres.DATABASE_URL}}).`);
+    }
+    process.exit(1);
+  });
+}

@@ -138,7 +138,11 @@ async function main() {
 
 // Demo data goes to SEED_ORG (default: the first organization, BLPA).
 const { withOrg } = require("../lib/context");
-withOrg("*", async () => {
+const config = require("../config");
+const skip = !config.databaseUrl ? "No database connected; skipping demo data."
+  : process.argv.includes("--if-enabled") && !/^(1|true|yes)$/i.test(process.env.SEED_DEMO || "") ? "SEED_DEMO is not true; skipping demo data." : null;
+if (skip) console.log(skip);
+else withOrg("*", async () => {
   await db.migrate({ log: () => {} });
   return db.one("SELECT id FROM organizations WHERE slug = $1", [process.env.SEED_ORG || "blpa"]);
 })
