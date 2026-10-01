@@ -19,7 +19,7 @@
             h(
               "a",
               { class: "card game-card", href: `/tournament.html?id=${t.id}` },
-              h("div", { class: "row between" }, h("strong", null, t.name), t.live_games > 0 ? h("span", { class: "badge live" }, `${t.live_games} live`) : h("span", { class: "badge" }, t.status)),
+              h("div", { class: "row between" }, h("strong", { class: "title-row" }, t.logo_version ? h("img", { class: "logo md", src: BLST.logoUrl("tournaments", t.id, t.logo_version), alt: "" }) : "", t.name), t.live_games > 0 ? h("span", { class: "badge live" }, `${t.live_games} live`) : h("span", { class: "badge" }, t.status)),
               h("div", { class: "muted small" }, [t.season, t.location].filter(Boolean).join(" · ")),
               h("div", { class: "muted small" }, t.start_date ? `${fmtDate(t.start_date, { month: "short", day: "numeric", year: "numeric" })}` : "", ` · ${t.team_count} teams`),
             ),

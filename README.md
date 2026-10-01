@@ -85,6 +85,31 @@ heroku open
 
 The `Procfile` runs migrations in the release phase. TLS to Heroku Postgres is turned on automatically, and the app refuses to boot on Heroku without `ADMIN_TOKEN`. Run **one web dyno**: live updates fan out in memory. Before scaling out, move the event bus in `src/lib/bus.js` to Postgres LISTEN/NOTIFY.
 
+## Team logos
+
+Admin → Tournaments → **Teams & rosters**. Tap the logo box on a team's card, then choose an image from Photos or Files. You can also drag a file onto the box on a computer.
+- **Formats:** PNG, JPG, SVG or WebP. Square images look best. Big photos are shrunk to 512px on the device before upload.
+- **Where logos appear:** live scoreboards, game cards, standings, rosters, the scorekeeper screen and the draft preview.
+- **Tournament logo:** set it under **Settings**. It appears on the home page and the tournament page.
+- **Storage:** logos are kept in the database, so they survive Heroku restarts.
+- **Other apps:** can embed them via `logo_url` in the export API.
+
+## Uploading rosters after the draft
+
+Admin → Tournaments → **Draft / roster upload**:
+1. **Download template.** The template already has your team names: one blank line per team. **Download current rosters** gives the same format with everyone already on a team, ready to edit.
+2. **Fill it in** in Google Sheets, Excel or Numbers. Use one line per player: `team, number, first_name, last_name, position, role (C/A), email, round, pick`. Then export as CSV.
+   - Your own draft sheet works too. Headers like `Drafted By`, `Player`, `Jersey #`, `Pos`, `Captain`, `Round`, `Pick` are recognized.
+   - Semicolon- or tab-separated files are fine.
+   - See [`examples/draft-results-example.csv`](examples/draft-results-example.csv).
+3. **Choose the CSV file** (on iPad this opens Files).
+   - BLST checks the file and shows a **preview, team by team**. It flags new players, players changing teams, and players coming off a roster, and lists any problems with line numbers (for example two players given #9 on the same team). Nothing is saved yet.
+   - Tick **Replace current rosters with this file** for the final draft results. Anyone not in the file comes off their team. If the file has any problems, nobody is removed.
+4. Press **Import**.
+   - Swapped numbers are fine: one player can take another's old number in the same upload.
+   - Players whose team changed are logged under **Moves**.
+   - Games already played keep their original lineups.
+
 ## Using it on an iPad
 
 1. Open the app in Safari. Tap **Share → Add to Home Screen**. BLST then opens full-screen like an app, with its own icon.

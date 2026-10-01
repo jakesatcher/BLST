@@ -110,7 +110,7 @@
     if (!selectedTid) return mount(body, newTournamentForm());
     const t = await get(`/tournaments/${selectedTid}`);
     const sub = h("div");
-    const subTabs = tabs([["teams", "Teams & rosters"], ["schedule", "Schedule"], ["import", "Roster import"], ["moves", "Moves"], ["settings", "Settings"], ["factions", "Factions sync"]],
+    const subTabs = tabs([["teams", "Teams & rosters"], ["schedule", "Schedule"], ["import", "Draft / roster upload"], ["moves", "Moves"], ["settings", "Settings"], ["factions", "Factions sync"]],
       (s) => tournamentSub(s, t, sub), "teams");
     const checklist = h("div");
     mount(body, checklist, subTabs.el, sub);
@@ -123,8 +123,8 @@
     const [games, keys] = await Promise.all([get(`/tournaments/${t.id}/games`), get("/admin/api-keys")]);
     const steps = [
       ["Create the tournament", true],
-      ["Name your teams and pick colors", t.teams.length > 0 && !t.teams.some((x) => /^Team \d+$/.test(x.name)), "Teams & rosters", () => subTabs.set("teams")],
-      ["Put players on every team (or import a roster CSV)", t.teams.length > 0 && t.teams.every((x) => x.player_count > 0), "Add players", () => subTabs.set("teams")],
+      ["Name your teams, pick colors, add logos", t.teams.length > 0 && !t.teams.some((x) => /^Team \d+$/.test(x.name)), "Teams & rosters", () => subTabs.set("teams")],
+      ["Put players on every team: upload the draft results CSV", t.teams.length > 0 && t.teams.every((x) => x.player_count > 0), "Upload rosters", () => subTabs.set("import")],
       ["Schedule games", games.length > 0, "Schedule", () => subTabs.set("schedule")],
       ["Create a scorekeeper key for each rink device", keys.some((k) => k.role === "scorekeeper" && !k.revoked_at), "API keys", () => mainTabs.set("keys")],
       ["Score a game", games.some((g) => g.status !== "scheduled"), "Open scorekeeper", () => (location.href = "/scorekeeper.html")],
@@ -191,7 +191,11 @@
   }
 
   function settingsView(t, el) {
-    mount(el, h("div", { class: "card" }, h("h2", null, "Settings"),
+    mount(el,
+      h("div", { class: "card" }, h("h2", null, "Tournament logo"),
+        h("p", { class: "muted small" }, "Shown on the tournament page and the home page. Team logos are set on each team's card under Teams & rosters."),
+        BLST.logoEditor("tournaments", t, null, { label: "Tournament logo" })),
+      h("div", { class: "card" }, h("h2", null, "Settings"),
       h("form", { class: "form", onsubmit: async (e) => {
         e.preventDefault();
         await run(() => api("PATCH", `/tournaments/${t.id}`, values(e.target, { blankAsNull: true })), "Saved");
@@ -221,6 +225,8 @@
 
     const teamCard = (team) => {
       return h("div", { class: "card" },
+        BLST.logoEditor("teams", team, null, { label: "Team logo" }),
+        h("div", { style: { height: "12px" } }),
         h("form", { class: "form", onsubmit: async (e) => {
           e.preventDefault();
           await run(() => api("PATCH", `/teams/${team.id}`, values(e.target, { blankAsNull: true })), "Team saved");
@@ -379,7 +385,7 @@
       h("div", { class: "card" }, h("h2", null, "Games"),
         table([
           { key: "scheduled_at", label: "When", fmt: (g) => fmtDate(g.scheduled_at) },
-          { key: "matchup", label: "Game", sort: false, fmt: (g) => h("span", null, teamDot(g.away_color), g.away_team, " @ ", teamDot(g.home_color), g.home_team) },
+          { key: "matchup", label: "Game", sort: false, fmt: (g) => h("span", null, BLST.gameTeamMark(g, "away"), g.away_team, " @ ", BLST.gameTeamMark(g, "home"), g.home_team) },
           { key: "game_type", label: "Type" },
           { key: "status", label: "Status", fmt: (g) => statusBadge(g) },
           { key: "score", label: "Score", sort: false, fmt: (g) => (g.status === "scheduled" ? "" : `${g.away_score}–${g.home_score}`) },
@@ -405,26 +411,130 @@
         ], games, { sortKey: "scheduled_at", sortDir: 1 })));
   }
 
+  /**
+   * Post-draft roster upload: download a template with the real team names,
+   * fill it in (or export the draft sheet), upload, review the preview, import.
+   */
   function rosterImportView(t, el) {
-    const area = h("textarea", { placeholder: "first_name,last_name,number,position,team,email\nSam,Sniper,9,C,Wolves,sam@example.com" });
-    const report = h("div");
-    const opts = h("div", { class: "row" },
-      h("label", { class: "inline" }, h("input", { type: "checkbox", id: "ri-teams" }), "Create teams that don't exist"),
-      h("label", { class: "inline" }, h("input", { type: "checkbox", id: "ri-skip" }), "Skip bad rows"));
-    const go = async (dry) => {
-      const body = importPayload(area.value, { dry_run: dry, create_missing_teams: $("#ri-teams").checked, skip_errors: $("#ri-skip").checked });
+    let text = "";
+    let fileName = "";
+    const hasRosters = t.teams.some((x) => x.player_count > 0);
+    const fileInput = h("input", { type: "file", accept: ".csv,text/csv,text/plain,.tsv,.txt", class: "hidden" });
+    const area = h("textarea", { placeholder: "team,number,first_name,last_name,position,role,email,round,pick\nVarghona Wolves,9,Sam,Sniper,C,C,sam@example.com,1,3" });
+    const chosen = h("div", { class: "muted small" }, "No file chosen yet.");
+    const replace = h("input", { type: "checkbox", checked: false });
+    const createTeams = h("input", { type: "checkbox" });
+    const skip = h("input", { type: "checkbox" });
+    const review = h("div");
+
+    async function preview() {
+      text = area.value.trim() ? area.value : text;
+      if (!text.trim()) return mount(review);
+      mount(review, h("div", { class: "card" }, h("p", { class: "muted" }, "Checking the file…")));
+      const body = importPayload(text, { dry_run: true, replace: replace.checked, create_missing_teams: createTeams.checked, skip_errors: skip.checked });
       try {
-        mount(report, importReport(await api("POST", `/import/roster/${t.id}`, body)));
+        renderReview(await api("POST", `/import/roster/${t.id}`, body), body);
       } catch (err) {
-        if (err.data && err.data.errors) mount(report, importReport(err.data));
-        else toast(err.message, true);
+        if (err.data && err.data.errors) renderReview(err.data, body);
+        else mount(review, h("div", { class: "card" }, h("p", { class: "notice error" }, err.message)));
       }
-    };
-    mount(el, h("div", { class: "card" }, h("h2", null, "Import roster"),
-      h("p", { class: "muted small" }, "CSV (or a JSON array) with a header row. Columns: first_name + last_name (or name), number, position, team (name or short name), and optionally email, external_id, role (C/A). Existing players are matched by external_id, email, then name. Re-importing updates numbers and moves players whose team changed."),
-      h("div", { class: "row", style: { marginBottom: "8px" } }, fileLoader(area)), area, opts,
-      h("div", { class: "row", style: { marginTop: "10px" } }, h("button", { onclick: () => go(true) }, "Dry run"), h("button", { class: "primary", onclick: () => go(false) }, "Import")),
-      report));
+    }
+
+    function renderReview(r, body) {
+      const pv = r.preview || [];
+      const errors = r.errors || [];
+      const count = (k) => pv.filter((x) => x.change === k).length;
+      const newPlayers = pv.filter((x) => x.new_player).length;
+      const pill = (label, cls) => h("span", { class: `badge ${cls || ""}` }, label);
+      const byTeam = new Map();
+      for (const p of pv) {
+        if (!byTeam.has(p.team_id)) byTeam.set(p.team_id, { name: p.team, new_team: p.new_team, players: [] });
+        byTeam.get(p.team_id).players.push(p);
+      }
+      const teamInfo = new Map((r.teams || t.teams).map((x) => [x.id, x]));
+      const tag = (p) => {
+        if (p.change === "added") return pill(p.new_player ? "new player" : "added", "good");
+        if (p.change === "moved") return pill("moved", "pp");
+        if (p.change === "updated") return pill("updated");
+        return "";
+      };
+      const draft = (p) => [p.draft_round != null ? `Rd ${p.draft_round}` : null, p.draft_pick != null ? `#${p.draft_pick}` : null].filter(Boolean).join(" ");
+      const canImport = pv.length > 0 && (errors.length === 0 || skip.checked);
+      mount(review, h("div", { class: "card" },
+        h("h2", null, "Review"),
+        h("div", { class: "summary-pills" },
+          pill(`${pv.length} player${pv.length === 1 ? "" : "s"}`),
+          newPlayers ? pill(`${newPlayers} new to BLST`, "good") : "",
+          count("moved") ? pill(`${count("moved")} changing teams`, "pp") : "",
+          r.removed && r.removed.length ? pill(`${r.removed.length} coming off rosters`, "bad") : "",
+          r.created_teams ? pill(`${r.created_teams} new team${r.created_teams === 1 ? "" : "s"}`, "good") : "",
+          r.skipped_blank ? pill(`${r.skipped_blank} blank line${r.skipped_blank === 1 ? "" : "s"} skipped`) : "",
+          errors.length ? pill(`${errors.length} problem${errors.length === 1 ? "" : "s"}`, "bad") : pill("no problems", "good")),
+        errors.length ? h("div", { class: "notice error", style: { marginBottom: "12px" } },
+          h("strong", null, skip.checked ? "These rows will be skipped:" : "Fix these in your file and choose it again (or tick “skip rows with problems”):"),
+          h("ul", { class: "small", style: { margin: "6px 0 0" } }, errors.slice(0, 40).map((e) => h("li", null, `Line ${e.row}: ${e.error}`))),
+          errors.length > 40 ? h("div", { class: "small" }, `…and ${errors.length - 40} more`) : "") : "",
+        r.replace_skipped ? h("p", { class: "notice" }, "Nobody will be taken off a roster while the file has problems.") : "",
+        h("div", { class: "preview-teams" }, [...byTeam.entries()].map(([teamId, tm]) =>
+          h("div", { class: "card" },
+            h("h3", { class: "title-row" }, BLST.teamMark(teamInfo.get(teamId) || { id: teamId }, "md") || "", tm.name, tm.new_team ? pill("new team", "good") : "",
+              h("span", { class: "muted small", style: { marginLeft: "auto" } }, `${tm.players.length}`)),
+            h("ul", null, tm.players.sort((a, b) => (a.number ?? 999) - (b.number ?? 999)).map((p) =>
+              h("li", { class: p.number_error ? "err" : null },
+                h("span", { class: "n" }, p.number != null ? `#${p.number}` : "–"),
+                h("span", null, p.name, p.role ? h("strong", null, ` (${p.role})`) : "", p.position ? h("span", { class: "muted" }, ` ${p.position}`) : "",
+                  draft(p) ? h("span", { class: "muted small" }, ` · ${draft(p)}`) : ""),
+                h("span", { class: "tag" }, tag(p)))))))),
+        r.removed && r.removed.length ? h("details", { style: { marginTop: "12px" } },
+          h("summary", null, `${r.removed.length} player(s) not in the file will come off their teams`),
+          h("ul", { class: "small" }, r.removed.map((x) => h("li", null, `${x.name} (${x.team}${x.number != null ? ` #${x.number}` : ""})`)))) : "",
+        h("div", { class: "row", style: { marginTop: "14px" } },
+          h("button", { class: "primary", disabled: !canImport, onclick: async () => {
+            try {
+              const done = await api("POST", `/import/roster/${t.id}`, { ...body, dry_run: false });
+              toast(`Imported ${done.imported} players`);
+              mount(review, h("div", { class: "card" },
+                h("p", { class: "notice" }, h("strong", null, "Rosters saved. "), `${done.imported} players imported${done.removed && done.removed.length ? `, ${done.removed.length} taken off rosters` : ""}.`),
+                h("div", { class: "row" }, h("button", { class: "primary", onclick: () => tournamentsView() }, "See the teams"),
+                  h("a", { class: "btn", href: `/tournament.html?id=${t.id}#teams`, target: "_blank" }, "Public rosters ↗"))));
+            } catch (err) {
+              if (err.data && err.data.errors) renderReview(err.data, body);
+              else toast(err.message, true);
+            }
+          } }, `Import ${pv.length} player${pv.length === 1 ? "" : "s"}`),
+          !canImport && errors.length ? h("span", { class: "muted small" }, "Fix the problems above to import.") : "")));
+    }
+
+    fileInput.addEventListener("change", async () => {
+      const f = fileInput.files[0];
+      fileInput.value = "";
+      if (!f) return;
+      if (/\.xlsx?$/i.test(f.name)) return toast("That's an Excel file: in Excel use File → Save As → CSV, then choose the CSV", true);
+      text = await f.text();
+      area.value = "";
+      fileName = f.name;
+      mount(chosen, h("strong", null, fileName), ` · ${text.split(/\r?\n/).filter((l) => l.trim()).length - 1} lines`);
+      preview();
+    });
+    for (const box of [replace, createTeams, skip]) box.addEventListener("change", preview);
+    area.addEventListener("input", debounce(() => { if (area.value.trim()) { fileName = ""; mount(chosen, "Using pasted text."); preview(); } }, 600));
+
+    mount(el, h("div", { class: "steps" },
+      h("div", { class: "card" }, h("h2", null, "Get the template"),
+        h("p", { class: "muted" }, "One line per player: team, jersey number, name, and optionally position, C/A, email (needed for BLPA Factions), draft round and pick. Your own draft spreadsheet works too if its columns are named like these."),
+        h("div", { class: "row" },
+          h("button", { class: "primary", onclick: () => BLST.downloadAuthed(`/tournaments/${t.id}/roster.csv?template=1`, "roster-template.csv").catch((e) => toast(e.message, true)) }, "Download template"),
+          hasRosters ? h("button", { onclick: () => BLST.downloadAuthed(`/tournaments/${t.id}/roster.csv`, "rosters.csv").catch((e) => toast(e.message, true)) }, "Download current rosters") : ""),
+        h("p", { class: "small muted", style: { marginBottom: 0 } }, "Team names must match: ", t.teams.map((x) => x.name).join(", "),
+          ". Google Sheets: File → Download → CSV. Excel: File → Save As → CSV. Numbers app: File → Export To → CSV.")),
+      h("div", { class: "card" }, h("h2", null, "Upload the draft results"),
+        h("div", { class: "row" }, h("button", { class: "primary", onclick: () => fileInput.click() }, "Choose CSV file…"), chosen, fileInput),
+        h("details", { style: { marginTop: "10px" } }, h("summary", null, "…or paste from a spreadsheet"), area),
+        h("div", { class: "stack", style: { marginTop: "12px" } },
+          h("label", { class: "inline" }, replace, h("span", null, h("strong", null, "Replace current rosters with this file"), h("span", { class: "muted small" }, " · anyone not in the file comes off their team (use this for the final draft results)"))),
+          h("label", { class: "inline" }, createTeams, "Create teams that don't exist yet"),
+          h("label", { class: "inline" }, skip, "Skip rows with problems and import the rest"))),
+      review));
   }
 
   async function movesView(t, el) {

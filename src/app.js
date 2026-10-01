@@ -30,6 +30,7 @@ function createApp() {
 
   const api = express.Router();
   api.use(authenticate);
+  api.use(require("./routes/media"));
   api.use(require("./routes/tournaments"));
   api.use(require("./routes/players"));
   api.use(require("./routes/games"));

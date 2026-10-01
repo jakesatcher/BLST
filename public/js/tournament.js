@@ -15,7 +15,8 @@
   mount(
     app,
     h("div", { class: "row between" },
-      h("div", null, h("h1", null, t.name), h("div", { class: "muted" }, [t.season, t.location, `${t.teams.length} teams`].filter(Boolean).join(" · "))),
+      h("div", { class: "title-row" }, t.logo_version ? h("img", { class: "logo lg", src: BLST.logoUrl("tournaments", t.id, t.logo_version), alt: "" }) : "",
+        h("div", null, h("h1", null, t.name), h("div", { class: "muted" }, [t.season, t.location, `${t.teams.length} teams`].filter(Boolean).join(" · ")))),
       h("div", { class: "row" },
         h("a", { class: "btn", href: `/api/v1/export/tournaments/${id}/skaters?format=csv` }, "Skaters CSV"),
         h("a", { class: "btn", href: `/api/v1/export/tournaments/${id}` }, "JSON"))),
@@ -25,6 +26,8 @@
   );
 
   let cards = null;
+
+  const draftLabel = (r) => [r.draft_round != null ? `Rd ${r.draft_round}` : null, r.draft_pick != null ? `#${r.draft_pick}` : null].filter(Boolean).join(" · ");
 
   async function show(tab) {
     if (cards) cards.stop();
@@ -47,7 +50,7 @@
       return mount(view, h("div", { class: "card" }, table(
         [
           { key: "rank", label: "#", num: true },
-          { key: "name", label: "Team", fmt: (r) => h("span", null, teamDot(r.color), r.name) },
+          { key: "name", label: "Team", fmt: (r) => h("span", null, BLST.teamMark({ id: r.team_id, logo_version: r.logo_version, color: r.color }), r.name) },
           { key: "gp", label: "GP", num: true }, { key: "w", label: "W", num: true }, { key: "l", label: "L", num: true },
           { key: "otl", label: "OTL", num: true }, ...(t.allow_ties ? [{ key: "t", label: "T", num: true }] : []),
           { key: "pts", label: "PTS", num: true }, { key: "gf", label: "GF", num: true }, { key: "ga", label: "GA", num: true },
@@ -105,13 +108,15 @@
       const teams = await get(`/tournaments/${id}/teams`);
       return mount(view, h("div", { class: "grid two" }, teams.map((team) =>
         h("div", { class: "card" },
-          h("h2", null, teamDot(team.color), team.name, team.short_name ? h("span", { class: "muted small" }, ` (${team.short_name})`) : ""),
+          h("h2", { class: "title-row" }, BLST.teamMark(team, "md") || teamDot(team.color), team.name, team.short_name ? h("span", { class: "muted small" }, ` (${team.short_name})`) : ""),
           table(
             [
               { key: "jersey_number", label: "#", num: true },
               { key: "last_name", label: "Player", fmt: (r) => h("a", { href: `/player.html?id=${r.id}` }, `${r.first_name} ${r.last_name}`, r.role ? ` (${r.role})` : "") },
               { key: "position", label: "Pos" },
               ...(t.factions_event_id ? [{ key: "factions_order", label: "Order" }] : []),
+              ...(team.roster.some((r) => r.draft_round != null || r.draft_pick != null)
+                ? [{ key: "draft_pick", label: "Drafted", num: true, fmt: (r) => draftLabel(r) }] : []),
             ],
             team.roster,
             { sortKey: "jersey_number", sortDir: 1 },

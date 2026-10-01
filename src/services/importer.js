@@ -123,7 +123,7 @@ async function resolvePlayer(c, row, { create, report }) {
       numberOrNull(pick(row, ["number", "no", "jersey", "jersey_number", "num"]))],
   );
   report.created_players += 1;
-  return created.rows[0];
+  return { ...created.rows[0], __created: true };
 }
 
 function normalizePosition(v) {
@@ -154,7 +154,7 @@ function numberOrNull(v) {
  * the whole import back so a half-applied file never happens. dry_run
  * always rolls back.
  */
-async function runImport(body, perRow) {
+async function runImport(body, perRow, finish) {
   const rows = rowsFrom(body);
   if (!rows.length) throw badRequest("no rows to import");
   if (rows.length > 20000) throw badRequest("too many rows (max 20000 per import)");
@@ -168,15 +168,18 @@ async function runImport(body, perRow) {
       await client.query("SAVEPOINT row");
       const counters = { created_players: report.created_players, created_teams: report.created_teams, moved: report.moved };
       try {
-        await perRow(client, rows[i], report);
+        const outcome = await perRow(client, rows[i], report, i + 2);
         await client.query("RELEASE SAVEPOINT row");
-        report.imported += 1;
+        if (outcome === "skip") report.skipped_blank = (report.skipped_blank || 0) + 1;
+        else report.imported += 1;
       } catch (err) {
         await client.query("ROLLBACK TO SAVEPOINT row");
         Object.assign(report, counters);
         report.errors.push({ row: i + 2, error: friendly(err) });
       }
     }
+    if (finish) await finish(client, report);
+    report.errors.sort((a, b) => a.row - b.row);
     const abort = dryRun || (report.errors.length > 0 && !skipErrors);
     await client.query(abort ? "ROLLBACK" : "COMMIT");
     report.committed = !abort;
@@ -221,55 +224,188 @@ async function importHistorical(body) {
   return report;
 }
 
+const TEAM_ALIASES = ["team", "team_name", "team_id", "drafted_by", "draft_team", "drafting_team", "drafted_to", "new_team"];
+const NUMBER_ALIASES = ["number", "no", "jersey", "jersey_number", "jersey_no", "num", "sweater", "sweater_number"];
+
 /**
- * Imports a tournament roster: creates/updates players, creates teams by
- * name when allowed, and assigns jersey numbers. Re-importing moves
- * players whose team changed (logged as roster moves).
+ * Imports a tournament roster, typically the results of the draft: one row
+ * per player with team, jersey number and optionally position, captaincy,
+ * email and draft round/pick.
+ *
+ * Two passes so number swaps work (A takes #9 from B, B takes #12): pass 1
+ * places every player on their team without a number, pass 2 hands out the
+ * numbers. With `replace: true`, anyone on this tournament's rosters who
+ * isn't in the file comes off their team (between the passes, so their
+ * numbers are free). Re-importing moves players whose team changed and
+ * logs it as a roster move. Rows with only a team filled in (the blank
+ * lines of the downloadable template) are skipped.
+ *
+ * The report always includes a per-row `preview`, so a dry run shows
+ * exactly what will happen before anything is saved.
  */
 async function importRoster(tournamentId, body) {
   const t = await db.one("SELECT * FROM tournaments WHERE id = $1", [tournamentId]);
   if (!t) throw badRequest("tournament not found");
   const createTeams = Boolean(body.create_missing_teams);
-  const report = await runImport(body, async (c, row, rep) => {
+  const replace = Boolean(body.replace);
+  const planned = [];
+  const seenPlayer = new Map();
+  const seenNumber = new Map();
+  const preview = [];
+
+  const perRow = async (c, row, rep, rowNum) => {
+    const { first, last } = splitName(row);
+    const hasPlayer = first || last || pick(row, ["email", "e_mail", "email_address", "external_id", "player_id"]);
+    if (!hasPlayer) return "skip";
+
     const player = await resolvePlayer(c, row, { create: true, report: rep });
-    const teamRef = pick(row, ["team", "team_name", "team_id"]);
-    if (!teamRef) throw new Error("row needs a team");
+    const playerName = `${player.first_name} ${player.last_name}`;
+    if (seenPlayer.has(player.id)) throw new Error(`${playerName} is also on row ${seenPlayer.get(player.id)}`);
+    seenPlayer.set(player.id, rowNum);
+
+    const teamRef = pick(row, TEAM_ALIASES);
+    if (!teamRef) throw new Error(`${playerName}: no team given`);
     let team = (await c.query(
       "SELECT * FROM teams WHERE tournament_id = $1 AND (lower(name) = lower($2) OR lower(short_name) = lower($2) OR id::text = $2)",
       [tournamentId, teamRef],
     )).rows[0];
+    let newTeam = false;
     if (!team) {
-      if (!createTeams) throw new Error(`no team "${teamRef}" in this tournament`);
-      team = (await c.query("INSERT INTO teams (tournament_id, name) VALUES ($1, $2) RETURNING *", [tournamentId, teamRef])).rows[0];
+      if (!createTeams) throw new Error(`${playerName}: there's no team called "${teamRef}" (tick "create teams that don't exist", or fix the name)`);
+      team = (await c.query("INSERT INTO teams (tournament_id, name, seed) VALUES ($1, $2, (SELECT count(*) + 1 FROM teams WHERE tournament_id = $1)) RETURNING *", [tournamentId, teamRef])).rows[0];
       rep.created_teams += 1;
+      newTeam = true;
     }
-    const number = numberOrNull(pick(row, ["number", "no", "jersey", "jersey_number", "num"]));
+
+    const number = numberOrNull(pick(row, NUMBER_ALIASES));
+    if (number != null) {
+      const key = `${team.id}:${number}`;
+      if (seenNumber.has(key)) throw new Error(`#${number} on ${team.name} is also given to ${seenNumber.get(key).name} (row ${seenNumber.get(key).row})`);
+      seenNumber.set(key, { name: playerName, row: rowNum });
+    }
     const position = normalizePosition(pick(row, ["position", "pos"]));
-    const role = (pick(row, ["role", "captain", "letter"]) || "").toUpperCase().slice(0, 1) || null;
+    const role = parseRole(row);
+    const round = optionalInt(pick(row, ["round", "rd", "draft_round"]), "round");
+    const overall = optionalInt(pick(row, ["pick", "overall", "overall_pick", "draft_pick", "pick_no", "selection"]), "pick");
     const email = pick(row, ["email", "e_mail", "email_address"]);
     if (email && !player.email) await c.query("UPDATE players SET email = lower($2) WHERE id = $1", [player.id, email]);
+
     const existing = (await c.query("SELECT * FROM roster_entries WHERE tournament_id = $1 AND player_id = $2", [tournamentId, player.id])).rows[0];
+    let change;
+    let entryId;
     if (existing) {
+      const same = existing.team_id === team.id && existing.jersey_number === number && (position == null || existing.position === position) &&
+        existing.role === role && existing.draft_round === round && existing.draft_pick === overall;
+      change = existing.team_id !== team.id ? "moved" : same ? "unchanged" : "updated";
       await c.query(
-        "UPDATE roster_entries SET team_id = $2, jersey_number = $3, position = COALESCE($4, position), role = $5 WHERE id = $1",
-        [existing.id, team.id, number, position, role === "C" || role === "A" ? role : null],
+        `UPDATE roster_entries SET team_id = $2, jersey_number = NULL, position = COALESCE($3, position), role = $4,
+                draft_round = $5, draft_pick = $6 WHERE id = $1`,
+        [existing.id, team.id, position, role, round, overall],
       );
+      entryId = existing.id;
       if (existing.team_id !== team.id) {
         await c.query(
-          "INSERT INTO roster_moves (tournament_id, player_id, from_team_id, to_team_id, jersey_number, reason) VALUES ($1, $2, $3, $4, $5, 'roster import')",
-          [tournamentId, player.id, existing.team_id, team.id, number],
+          "INSERT INTO roster_moves (tournament_id, player_id, from_team_id, to_team_id, jersey_number, reason) VALUES ($1, $2, $3, $4, $5, $6)",
+          [tournamentId, player.id, existing.team_id, team.id, number, body.reason || "roster upload"],
         );
         rep.moved += 1;
       }
     } else {
-      await c.query(
-        "INSERT INTO roster_entries (tournament_id, team_id, player_id, jersey_number, position, role) VALUES ($1, $2, $3, $4, $5, $6)",
-        [tournamentId, team.id, player.id, number, position, role === "C" || role === "A" ? role : null],
-      );
+      change = "added";
+      entryId = (await c.query(
+        `INSERT INTO roster_entries (tournament_id, team_id, player_id, jersey_number, position, role, draft_round, draft_pick)
+         VALUES ($1, $2, $3, NULL, $4, $5, $6, $7) RETURNING id`,
+        [tournamentId, team.id, player.id, position, role, round, overall],
+      )).rows[0].id;
     }
-  });
+    planned.push({ entryId, number, rowNum, playerName, team });
+    preview.push({
+      row: rowNum, player_id: player.id, name: playerName, new_player: player.__created === true,
+      team_id: team.id, team: team.name, new_team: newTeam, number, position: position ?? existing?.position ?? player.position ?? null,
+      role, draft_round: round, draft_pick: overall, change,
+    });
+  };
+
+  const finish = async (c, rep) => {
+    // Players not in the file come off their teams before numbers are handed out.
+    // ...but never when some rows failed: a typo'd name must not knock that
+    // player off their team.
+    if (replace && rep.errors.length) rep.replace_skipped = true;
+    else if (replace) {
+      const keep = [...seenPlayer.keys()];
+      const removed = (await c.query(
+        `DELETE FROM roster_entries re USING players p, teams tm
+          WHERE re.tournament_id = $1 AND p.id = re.player_id AND tm.id = re.team_id AND NOT (re.player_id = ANY($2::int[]))
+          RETURNING p.first_name, p.last_name, tm.name AS team, re.jersey_number`,
+        [tournamentId, keep],
+      )).rows;
+      rep.removed = removed.map((r) => ({ name: `${r.first_name} ${r.last_name}`, team: r.team, number: r.jersey_number }));
+    }
+    for (const p of planned) {
+      if (p.number == null) continue;
+      await c.query("SAVEPOINT num");
+      try {
+        const holder = (await c.query(
+          `SELECT p.first_name, p.last_name FROM roster_entries re JOIN players p ON p.id = re.player_id
+            WHERE re.team_id = $1 AND re.jersey_number = $2 AND re.id <> $3`,
+          [p.team.id, p.number, p.entryId],
+        )).rows[0];
+        if (holder) throw new Error(`#${p.number} on ${p.team.name} is already worn by ${holder.first_name} ${holder.last_name}, who isn't in this file. Change one of the numbers, or tick "replace current rosters"`);
+        await c.query("UPDATE roster_entries SET jersey_number = $2 WHERE id = $1", [p.entryId, p.number]);
+        await c.query("RELEASE SAVEPOINT num");
+      } catch (err) {
+        await c.query("ROLLBACK TO SAVEPOINT num");
+        rep.errors.push({ row: p.rowNum, error: `${p.playerName}: ${friendly(err)}` });
+        const pv = preview.find((x) => x.row === p.rowNum);
+        if (pv) pv.number_error = true;
+      }
+    }
+    rep.preview = preview.slice(0, 2000);
+    const teams = await c.query(
+      `SELECT tm.id, tm.name, tm.logo_version, tm.color, count(re.id)::int AS players FROM teams tm LEFT JOIN roster_entries re ON re.team_id = tm.id
+        WHERE tm.tournament_id = $1 GROUP BY tm.id ORDER BY tm.seed NULLS LAST, tm.name`,
+      [tournamentId],
+    );
+    rep.teams = teams.rows;
+  };
+
+  const report = await runImport(body, perRow, finish);
+  report.replace = replace;
   if (report.committed) emitDomain("roster.imported", { tournament_id: tournamentId, rows: report.imported });
   return report;
 }
 
-module.exports = { importHistorical, importRoster, splitName, parseMinutes };
+function parseRole(row) {
+  const v = (pick(row, ["role", "letter", "c_a"]) || "").trim().toUpperCase();
+  if (v.startsWith("C")) return "C";
+  if (v.startsWith("A")) return "A";
+  const captain = (pick(row, ["captain", "is_captain"]) || "").trim().toLowerCase();
+  if (["y", "yes", "true", "x", "1", "c"].includes(captain)) return "C";
+  if (captain === "a") return "A";
+  return null;
+}
+
+function optionalInt(v, name) {
+  if (v === undefined || v === "") return null;
+  const n = Number(String(v).replace(/^#/, ""));
+  if (!Number.isInteger(n) || n < 0) throw new Error(`${name} must be a whole number, got "${v}"`);
+  return n;
+}
+
+/** CSV of the tournament's rosters in the upload format (the template when empty). */
+async function rosterCsv(tournamentId, { template = false } = {}) {
+  const teams = await db.many("SELECT * FROM teams WHERE tournament_id = $1 ORDER BY seed NULLS LAST, name", [tournamentId]);
+  const rows = template ? [] : await db.many(
+    `SELECT tm.name AS team, re.jersey_number AS number, p.first_name, p.last_name, COALESCE(re.position, p.position) AS position,
+            re.role, p.email, re.draft_round AS round, re.draft_pick AS pick, p.external_id
+       FROM roster_entries re JOIN players p ON p.id = re.player_id JOIN teams tm ON tm.id = re.team_id
+      WHERE re.tournament_id = $1 ORDER BY tm.seed NULLS LAST, tm.name, re.jersey_number NULLS LAST, p.last_name`,
+    [tournamentId],
+  );
+  // A template is one blank line per team: fill in the players, add lines as needed.
+  const out = rows.length ? rows : teams.map((tm) => ({ team: tm.name }));
+  const { toCsv } = require("../lib/csv");
+  return toCsv(out, ["team", "number", "first_name", "last_name", "position", "role", "email", "round", "pick", "external_id"]);
+}
+
+module.exports = { importHistorical, importRoster, rosterCsv, splitName, parseMinutes };

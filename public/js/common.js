@@ -297,8 +297,8 @@
       const card = h(
         "a",
         { class: "card game-card", href: `/game.html?id=${g.id}` },
-        h("div", { class: "line" }, h("span", null, teamDot(g.away_color), g.away_team), h("span", { class: "score" }, g.status === "scheduled" ? "" : g.away_score)),
-        h("div", { class: "line" }, h("span", null, teamDot(g.home_color), g.home_team), h("span", { class: "score" }, g.status === "scheduled" ? "" : g.home_score)),
+        h("div", { class: "line" }, h("span", null, window.BLST.gameTeamMark(g, "away"), g.away_team), h("span", { class: "score" }, g.status === "scheduled" ? "" : g.away_score)),
+        h("div", { class: "line" }, h("span", null, window.BLST.gameTeamMark(g, "home"), g.home_team), h("span", { class: "score" }, g.status === "scheduled" ? "" : g.home_score)),
         h(
           "div",
           { class: "meta" },
@@ -498,4 +498,137 @@
   }
 
   Object.assign(window.BLST, { openSheet, confirmSheet, formSheet, keepAwake, connectionPill });
+})();
+
+/* Team / tournament graphics. */
+(function () {
+  const { h, getToken } = window.BLST;
+
+  function logoUrl(kind, id, version) {
+    return version ? `/api/v1/${kind}/${id}/logo?v=${version}` : null;
+  }
+
+  /**
+   * A team's logo if it has one, otherwise its color dot.
+   * team: {id, logo_version, color, name}; size: "sm" (inline) | "md" | "lg" | "xl".
+   */
+  function teamMark(team, size = "sm") {
+    if (!team) return "";
+    const url = logoUrl("teams", team.id ?? team.team_id, team.logo_version);
+    if (!url) return size === "sm" ? h("span", { class: "dot", style: { background: team.color || "var(--muted)" } }) : "";
+    return h("img", { class: `logo ${size}`, src: url, alt: "", loading: "lazy", decoding: "async" });
+  }
+
+  /** Same, built from a game-list row (home_/away_ prefixed columns). */
+  function gameTeamMark(g, side, size) {
+    return teamMark({ id: g[`${side}_team_id`], logo_version: g[`${side}_logo`], color: g[`${side}_color`] }, size);
+  }
+
+  /**
+   * Shrinks big photos (iPad camera roll) to at most 512px before upload,
+   * keeping transparency. SVGs and small files go up untouched.
+   */
+  async function prepareImage(file) {
+    if (file.type === "image/svg+xml" || (file.size < 300 * 1024 && file.type !== "image/heic")) return file;
+    const url = URL.createObjectURL(file);
+    try {
+      const img = await new Promise((resolve, reject) => {
+        const i = new Image();
+        i.onload = () => resolve(i);
+        i.onerror = () => reject(new Error("That file isn't an image this browser can read"));
+        i.src = url;
+      });
+      const scale = Math.min(1, 512 / Math.max(img.naturalWidth, img.naturalHeight));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+      canvas.getContext("2d").drawImage(img, 0, 0, canvas.width, canvas.height);
+      return await new Promise((resolve) => canvas.toBlob((b) => resolve(b || file), "image/png"));
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  async function uploadLogo(kind, id, file) {
+    const body = await prepareImage(file);
+    const headers = { "content-type": body.type || "application/octet-stream" };
+    const token = getToken();
+    if (token) headers.authorization = `Bearer ${token}`;
+    const res = await fetch(`/api/v1/${kind}/${id}/logo`, { method: "PUT", headers, body });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Upload failed (HTTP ${res.status})`);
+    return data;
+  }
+
+  /**
+   * Logo editor: preview + "Choose image" (opens Photos/Files on iPad) + Remove.
+   * onChange(newVersion|null) runs after a successful change.
+   */
+  function logoEditor(kind, owner, onChange, { label = "Logo" } = {}) {
+    let version = owner.logo_version;
+    const preview = h("div", { class: "logo-drop" });
+    const fileInput = h("input", { type: "file", accept: "image/*,.svg", class: "hidden" });
+    const status = h("span", { class: "small muted" });
+    const removeBtn = h("button", { type: "button", class: "sm ghost danger" }, "Remove");
+    function render() {
+      preview.replaceChildren(version ? h("img", { src: logoUrl(kind, owner.id, version), alt: `${label}` }) : h("span", { class: "muted small" }, "No logo"));
+      removeBtn.classList.toggle("hidden", !version);
+    }
+    async function take(file) {
+      if (!file) return;
+      if (file.size > 15 * 1024 * 1024) return window.BLST.toast("That image is too big (max 15 MB before resizing)", true);
+      status.textContent = "Uploading…";
+      try {
+        const r = await uploadLogo(kind, owner.id, file);
+        version = r.logo_version;
+        render();
+        status.textContent = "";
+        window.BLST.toast(`${label} updated`);
+        if (onChange) onChange(version);
+      } catch (err) {
+        status.textContent = "";
+        window.BLST.toast(err.message, true);
+      }
+    }
+    fileInput.addEventListener("change", () => take(fileInput.files[0]).finally(() => (fileInput.value = "")));
+    preview.addEventListener("click", () => fileInput.click());
+    preview.addEventListener("dragover", (e) => { e.preventDefault(); preview.classList.add("over"); });
+    preview.addEventListener("dragleave", () => preview.classList.remove("over"));
+    preview.addEventListener("drop", (e) => { e.preventDefault(); preview.classList.remove("over"); take(e.dataTransfer.files[0]); });
+    removeBtn.addEventListener("click", async () => {
+      if (!(await window.BLST.confirmSheet(`Remove this ${label.toLowerCase()}?`, { title: `Remove ${label.toLowerCase()}`, confirmLabel: "Remove", danger: true }))) return;
+      try {
+        await window.BLST.api("DELETE", `/${kind}/${owner.id}/logo`);
+        version = null;
+        render();
+        if (onChange) onChange(null);
+      } catch (err) {
+        window.BLST.toast(err.message, true);
+      }
+    });
+    render();
+    return h("div", { class: "logo-editor" }, preview,
+      h("div", { class: "stack" }, h("strong", { class: "small" }, label),
+        h("div", { class: "row" }, h("button", { type: "button", class: "sm", onclick: () => fileInput.click() }, version ? "Change…" : "Choose image…"), removeBtn),
+        h("span", { class: "small muted" }, "PNG, JPG, SVG or WebP. Square works best."), status),
+      fileInput);
+  }
+
+  /** Downloads a file from an admin-only URL (links can't carry the API key). */
+  async function downloadAuthed(path, fallbackName) {
+    const headers = {};
+    const token = getToken();
+    if (token) headers.authorization = `Bearer ${token}`;
+    const res = await fetch(`/api/v1${path}`, { headers });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `HTTP ${res.status}`);
+    const name = /filename="([^"]+)"/.exec(res.headers.get("content-disposition") || "")?.[1] || fallbackName;
+    const url = URL.createObjectURL(await res.blob());
+    const a = h("a", { href: url, download: name });
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
+
+  Object.assign(window.BLST, { logoUrl, teamMark, gameTeamMark, uploadLogo, logoEditor, downloadAuthed });
 })();

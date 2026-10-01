@@ -1,5 +1,16 @@
+/**
+ * Guesses the delimiter from the header line: Excel in many locales saves
+ * "CSV" with semicolons, and copy/paste from a spreadsheet gives tabs.
+ */
+function sniffDelimiter(text) {
+  const first = String(text).replace(/^\uFEFF/, "").split(/\r?\n/, 1)[0].replace(/"[^"]*"/g, "");
+  const counts = [",", ";", "\t"].map((d) => [d, first.split(d).length - 1]);
+  counts.sort((a, b) => b[1] - a[1]);
+  return counts[0][1] > 0 ? counts[0][0] : ",";
+}
+
 /** Minimal RFC 4180 CSV parser: quoted fields, escaped quotes, CRLF. */
-function parseCsv(text) {
+function parseCsv(text, delimiter = ",") {
   const rows = [];
   let row = [];
   let field = "";
@@ -15,7 +26,7 @@ function parseCsv(text) {
         } else inQuotes = false;
       } else field += c;
     } else if (c === '"') inQuotes = true;
-    else if (c === ",") {
+    else if (c === delimiter) {
       row.push(field);
       field = "";
     } else if (c === "\n" || c === "\r") {
@@ -35,7 +46,7 @@ function parseCsv(text) {
 
 /** Parses CSV with a header row into objects keyed by normalized header. */
 function csvToObjects(text) {
-  const [header, ...rows] = parseCsv(text);
+  const [header, ...rows] = parseCsv(text, sniffDelimiter(text));
   if (!header) return [];
   const keys = header.map(normalizeHeader);
   return rows.map((r) => Object.fromEntries(keys.map((k, i) => [k, (r[i] ?? "").trim()])));
@@ -60,4 +71,4 @@ function toCsv(rows, columns) {
   return [cols.join(","), ...rows.map((r) => cols.map((c) => esc(r[c])).join(","))].join("\r\n") + "\r\n";
 }
 
-module.exports = { parseCsv, csvToObjects, toCsv, normalizeHeader };
+module.exports = { sniffDelimiter, parseCsv, csvToObjects, toCsv, normalizeHeader };

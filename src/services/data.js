@@ -60,7 +60,7 @@ function playerLabel(r) {
 }
 
 function teamPublic(team) {
-  return team && { id: team.id, name: team.name, short_name: team.short_name, color: team.color };
+  return team && { id: team.id, name: team.name, short_name: team.short_name, color: team.color, logo_version: team.logo_version ?? null };
 }
 
 /** Public live state of a game, pushed to viewers over SSE. */
@@ -94,7 +94,7 @@ function buildSnapshot(bundle, now = Date.now()) {
 
   return {
     server_now: now,
-    tournament: { id: t.id, name: t.name, periods: t.periods, period_length_sec: t.period_length_sec, ot_length_sec: t.ot_length_sec },
+    tournament: { id: t.id, name: t.name, logo_version: t.logo_version ?? null, periods: t.periods, period_length_sec: t.period_length_sec, ot_length_sec: t.ot_length_sec },
     game: {
       id: game.id,
       tournament_id: game.tournament_id,

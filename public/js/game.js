@@ -23,6 +23,7 @@
       const pp = g.status !== "final" && s.skaters_on_ice > other.skaters_on_ice;
       return h("div", { class: "team" },
         h("div", { class: "strip", style: { background: s.color || "#56627a" } }),
+        BLST.teamMark(s, "lg"),
         h("div", { class: "name" }, s.name),
         h("div", { class: "score" }, g.status === "scheduled" ? "–" : s.score),
         h("div", { class: "sog" }, `SOG ${s.shots}`, pp ? h("span", { class: "badge pp", style: { marginLeft: "8px" } }, "PP") : ""),
@@ -108,7 +109,7 @@
     }
     if (tab === "feed") return mount(detail, h("div", { class: "card" }, feed([...snap.events].reverse())));
     if (tab === "lineups") {
-      const list = (side, rows) => h("div", { class: "card" }, h("h2", null, teamDot(side.color), side.name),
+      const list = (side, rows) => h("div", { class: "card" }, h("h2", null, BLST.teamMark(side), side.name),
         table([{ key: "number", label: "#", num: true }, { key: "name", label: "Player", fmt: (r) => h("a", { href: `/player.html?id=${r.player_id}` }, r.name) }, { key: "position", label: "Pos" },
           { key: "dressed", label: "", fmt: (r) => (r.dressed ? "" : "scratched") }], rows, { sortKey: "number", sortDir: 1 }));
       return mount(detail, h("div", { class: "grid two" }, list(snap.away, snap.lineups.away), list(snap.home, snap.lineups.home)));
@@ -127,7 +128,7 @@
         { key: "save_pct", label: "SV%", num: true, fmt: (r) => fmtPct(r.save_pct) },
         { key: "dec", label: "DEC", sort: false, fmt: (r) => (r.wins ? "W" : r.losses ? "L" : r.ot_losses ? "OTL" : r.ties ? "T" : "") },
       ];
-      const block = (side) => h("div", { class: "card" }, h("h2", null, teamDot(side.color), side.name),
+      const block = (side) => h("div", { class: "card" }, h("h2", null, BLST.teamMark(side), side.name),
         table(skaterCols, snap.box.skaters.filter((s) => s.team_id === side.id), { sortKey: "points" }),
         h("div", { style: { height: "10px" } }),
         table(goalieCols, snap.box.goalies.filter((g) => g.team_id === side.id && (g.gp || g.toi_sec)), { sortKey: "toi_sec" }));

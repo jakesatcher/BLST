@@ -32,8 +32,8 @@
     const games = await get("/games");
     const card = (g) => h("a", { class: "card", href: `/scorekeeper.html?game=${g.id}` },
       h("div", { class: "row between" }, statusBadge(g), h("span", { class: "muted small" }, fmtDate(g.scheduled_at))),
-      h("div", { class: "teams", style: { marginTop: "8px" } }, teamDot(g.away_color), g.away_team, g.status !== "scheduled" ? ` ${g.away_score}` : ""),
-      h("div", { class: "teams" }, teamDot(g.home_color), g.home_team, g.status !== "scheduled" ? ` ${g.home_score}` : ""),
+      h("div", { class: "teams", style: { marginTop: "8px" } }, BLST.gameTeamMark(g, "away"), g.away_team, g.status !== "scheduled" ? ` ${g.away_score}` : ""),
+      h("div", { class: "teams" }, BLST.gameTeamMark(g, "home"), g.home_team, g.status !== "scheduled" ? ` ${g.home_score}` : ""),
       h("div", { class: "muted small", style: { marginTop: "6px" } }, [g.tournament_name, g.venue].filter(Boolean).join(" · ")));
     const group = (title, list) => (list.length ? [h("h2", { style: { marginTop: "18px" } }, title), h("div", { class: "pick" }, list.map(card))] : "");
     const live = games.filter((g) => g.status === "live" || g.status === "intermission");
@@ -100,7 +100,7 @@
     const sideBox = (which) => {
       const s = side(which);
       return h("div", { class: `side ${which}` },
-        h("div", { class: "nm" }, which === "home" ? "" : teamDot(s.color), s.short_name || s.name, which === "home" ? [" ", teamDot(s.color)] : ""),
+        h("div", { class: "nm" }, which === "home" ? "" : BLST.teamMark(s), s.short_name || s.name, which === "home" ? [" ", BLST.teamMark(s)] : ""),
         h("div", { class: "sc" }, s.score),
         h("div", { class: "muted small" }, `SOG ${s.shots}`, s.goalie ? "" : h("strong", { style: { color: "var(--danger)" } }, " · EMPTY NET")));
     };
@@ -243,7 +243,7 @@
     const panel = (which) => {
       const s = side(which);
       return h("div", { class: "card" },
-        h("h2", { style: { margin: 0 } }, teamDot(s.color), s.name, h("span", { class: "muted small" }, which === "home" ? " (home)" : " (away)")),
+        h("h2", { style: { margin: 0 } }, BLST.teamMark(s), s.name, h("span", { class: "muted small" }, which === "home" ? " (home)" : " (away)")),
         h("div", { class: "muted small", style: { margin: "4px 0 10px" } },
           `SOG ${s.shots} · PIM ${s.pim} · ${s.skaters_on_ice} skaters · `, s.goalie ? `G: ${s.goalie.name}` : h("strong", { style: { color: "var(--danger)" } }, "EMPTY NET")),
         h("div", { class: "sk-actions" }, ACTIONS.map(([type, label, cls]) =>
@@ -482,7 +482,7 @@
           } }, "Add"))));
       }, 250));
       return h("div", null,
-        h("h3", null, teamDot(s.color), s.name),
+        h("h3", null, BLST.teamMark(s), s.name),
         h("table", null, h("tbody", null, snap.lineups[which].map((p) =>
           h("tr", null,
             h("td", { class: "num mono" }, p.number ?? ""),

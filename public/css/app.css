@@ -302,3 +302,38 @@ tr.tap td:last-child { color: var(--muted); text-align: right; }
 .sk-controls button { min-height: 48px; }
 .sk-actions button, .numgrid button { user-select: none; -webkit-user-select: none; }
 @media (max-height: 560px) { .sk-bar { position: static; } }
+
+/* Team graphics */
+img.logo { object-fit: contain; vertical-align: middle; flex: none; }
+img.logo.sm { width: 22px; height: 22px; margin-right: 6px; vertical-align: -6px; }
+img.logo.md { width: 40px; height: 40px; }
+img.logo.lg { width: 72px; height: 72px; }
+img.logo.xl { width: 96px; height: 96px; }
+.board img.logo.lg { display: block; margin: 0 auto 6px; filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.45)); }
+@media (max-width: 640px) { .board img.logo.lg { width: 48px; height: 48px; } }
+.logo-editor { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.logo-drop {
+  width: 84px; height: 84px; border: 2px dashed var(--border); border-radius: 12px; display: flex; align-items: center; justify-content: center;
+  cursor: pointer; background: var(--surface-2); overflow: hidden; flex: none; text-align: center;
+}
+.logo-drop img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.logo-drop.over { border-color: var(--accent); }
+.title-row { display: flex; gap: 14px; align-items: center; }
+
+/* Draft upload preview */
+.summary-pills { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+.summary-pills .badge { font-size: 0.8rem; padding: 4px 10px; }
+.badge.good { background: var(--good); border-color: var(--good); color: #fff; }
+.badge.bad { background: var(--danger); border-color: var(--danger); color: #fff; }
+.preview-teams { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); }
+.preview-teams .card { margin: 0; }
+.preview-teams ul { list-style: none; margin: 0; padding: 0; }
+.preview-teams li { display: flex; gap: 8px; align-items: baseline; padding: 4px 0; border-bottom: 1px solid var(--border); font-size: 0.9rem; }
+.preview-teams li .n { font-family: var(--mono); font-weight: 700; width: 2.6em; text-align: right; flex: none; }
+.preview-teams li .tag { margin-left: auto; }
+.preview-teams li.err .n { color: var(--danger); }
+.steps { counter-reset: step; display: grid; gap: 14px; }
+.steps > .card { margin: 0; }
+.steps > .card > h2::before { counter-increment: step; content: counter(step) ". "; color: var(--accent); }
+.preview-teams li .tag .badge { white-space: nowrap; }
+.preview-teams li > span:nth-child(2) { min-width: 0; }

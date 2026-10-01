@@ -349,7 +349,7 @@ function computeStandings(t, teams, games, gameStats) {
   const rows = new Map(
     teams.map((team) => [
       team.id,
-      { team_id: team.id, name: team.name, short_name: team.short_name, color: team.color,
+      { team_id: team.id, name: team.name, short_name: team.short_name, color: team.color, logo_version: team.logo_version ?? null,
         gp: 0, w: 0, l: 0, otl: 0, t: 0, pts: 0, gf: 0, ga: 0, diff: 0, pim: 0,
         reg_wins: 0, streak: "" },
     ]),

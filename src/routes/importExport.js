@@ -85,7 +85,8 @@ router.get("/export/tournaments/:id", exportAccess, async (req, res) => {
   const s = await data.tournamentStats(intParam(req.params.id));
   const t = s.tournament;
   const roster = await db.many(
-    `SELECT re.team_id, re.jersey_number, COALESCE(re.position, p.position) AS position, re.role, ${data.PUBLIC_PLAYER_COLS}
+    `SELECT re.team_id, re.jersey_number, COALESCE(re.position, p.position) AS position, re.role, re.draft_round, re.draft_pick,
+            ${data.PUBLIC_PLAYER_COLS}
        FROM roster_entries re JOIN players p ON p.id = re.player_id WHERE re.tournament_id = $1`,
     [t.id],
   );
@@ -98,6 +99,7 @@ router.get("/export/tournaments/:id", exportAccess, async (req, res) => {
     teams: s.teams.map((team) => ({
       id: team.id, name: team.name, short_name: team.short_name, color: team.color, seed: team.seed,
       final_placement: team.final_placement, external_id: team.external_id,
+      logo_url: team.logo_version ? `/api/v1/teams/${team.id}/logo?v=${team.logo_version}` : null,
       roster: roster.filter((r) => r.team_id === team.id),
     })),
     standings: s.standings,
