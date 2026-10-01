@@ -77,7 +77,7 @@
   // Shell
 
   const view = h("div");
-  const mainTabs = tabs([["tournaments", "Tournaments"], ["players", "Players"], ["history", "Historical import"], ["keys", "API keys"], ["webhooks", "Webhooks"], ["factions", "BLPA Factions"]],
+  const mainTabs = tabs([["tournaments", "Tournaments"], ["players", "Players"], ["history", "Historical import"], ["keys", "API keys"], ["webhooks", "Webhooks"], ["factions", "BLPA Factions"], ["security", "Security"]],
     (t) => { history.replaceState(null, "", `#${t}`); show(t); }, location.hash.slice(1).split("/")[0] || "tournaments", { size: "big" });
   mount(app,
     h("div", { class: "row between" }, h("h1", null, "Admin"),
@@ -85,7 +85,7 @@
     mainTabs.el, view);
 
   function show(tab) {
-    const fn = { tournaments: tournamentsView, players: playersView, history: historyView, keys: keysView, webhooks: webhooksView, factions: factionsGlobalView }[tab];
+    const fn = { tournaments: tournamentsView, players: playersView, history: historyView, keys: keysView, webhooks: webhooksView, factions: factionsGlobalView, security: securityView }[tab];
     mount(view, h("p", { class: "muted" }, "Loading…"));
     fn().catch((err) => mount(view, h("p", { class: "notice error" }, err.message)));
   }
@@ -810,11 +810,11 @@
   // API keys
 
   async function keysView() {
-    const keys = await get("/admin/api-keys");
+    const [keys, tournamentsForKeys] = await Promise.all([get("/admin/api-keys"), get("/tournaments")]);
     const created = h("div");
     mount(view,
       h("div", { class: "card" }, h("h2", null, "Create API key"),
-        h("p", { class: "muted small" }, "scorekeeper: run games (clock, events, lineups). readonly: export API when PUBLIC_EXPORTS=false. admin: everything, including creating keys."),
+        h("p", { class: "muted small" }, "scorekeeper: run games (clock, events, lineups). readonly: export API when PUBLIC_EXPORTS=false. admin: everything, including creating keys. Tip: give each rink device its own scorekeeper key, limited to the tournament and expiring after the event; revoke keys you no longer need."),
         h("form", { class: "form", onsubmit: async (e) => {
           e.preventDefault();
           const k = await run(() => api("POST", "/admin/api-keys", values(e.target)));
@@ -823,9 +823,14 @@
         } },
           field("Name", input("name", { required: true, placeholder: "Rink 1 scorekeeper" })),
           field("Role", select("role", ["scorekeeper", "readonly", "admin"], "scorekeeper")),
+          field("Limit to tournament", select("tournament_id", [["", "All tournaments"], ...tournamentsForKeys.map((t) => [t.id, t.name])], "", { "data-num": 1 })),
+          field("Expires after (days)", input("expires_in_days", { type: "number", min: 1, max: 3650, placeholder: "never" })),
           h("div", null, h("button", { class: "primary" }, "Create key")))),
       h("div", { class: "card" }, h("h2", null, "Keys"), table([
-        { key: "name", label: "Name" }, { key: "role", label: "Role" }, { key: "key_prefix", label: "Key", fmt: (k) => h("code", null, `${k.key_prefix}…`) },
+        { key: "name", label: "Name" }, { key: "role", label: "Role" },
+        { key: "tournament", label: "Tournament", fmt: (k) => k.tournament || "all" },
+        { key: "expires_at", label: "Expires", fmt: (k) => (k.expires_at ? fmtDate(k.expires_at) : "never") },
+        { key: "key_prefix", label: "Key", fmt: (k) => h("code", null, `${k.key_prefix}…`) },
         { key: "created_at", label: "Created", fmt: (k) => fmtDate(k.created_at) },
         { key: "last_used_at", label: "Last used", fmt: (k) => (k.last_used_at ? fmtDate(k.last_used_at) : "never") },
         { key: "revoked_at", label: "", sort: false, fmt: (k) => (k.revoked_at ? h("span", { class: "badge" }, "revoked") : h("button", { class: "sm danger", onclick: async () => {
@@ -895,6 +900,38 @@
         { key: "action", label: "Action" }, { key: "ok", label: "OK", fmt: (r) => (r.ok ? "✓" : "✗") },
         { key: "detail", label: "Detail", sort: false, fmt: (r) => h("code", { class: "small" }, JSON.stringify(r.detail).slice(0, 160)) },
       ], s.recent, { sortKey: "created_at" })));
+  }
+
+  // -------------------------------------------------------------------------
+  // Security
+
+  async function securityView() {
+    const [sec, log] = await Promise.all([get("/admin/security"), get("/admin/audit-log?limit=200")]);
+    const ok = (good, text) => h("li", null, h("span", { style: { color: good ? "var(--good)" : "var(--danger)", fontWeight: 800 } }, good ? "✓ " : "✗ "), text);
+    const rejectedOnly = h("input", { type: "checkbox" });
+    const logBox = h("div");
+    const renderLog = (rows) => mount(logBox, table([
+      { key: "at", label: "When", fmt: (r) => fmtDate(r.at, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", second: "2-digit" }) },
+      { key: "actor", label: "Who" }, { key: "method", label: "" }, { key: "path", label: "Path" },
+      { key: "status", label: "Result", num: true, fmt: (r) => h("span", { style: { color: r.status >= 400 ? "var(--danger)" : "" } }, r.status) },
+      { key: "ip", label: "IP" },
+    ], rows, { sortKey: "at" }));
+    rejectedOnly.addEventListener("change", async () => renderLog(await get(`/admin/audit-log?limit=200${rejectedOnly.checked ? "&rejected=true" : ""}`)));
+    mount(view,
+      h("div", { class: "card" }, h("h2", null, "Security checklist"),
+        h("ul", { class: "stack", style: { listStyle: "none", padding: 0 } },
+          ok(sec.admin_token_set && sec.admin_token_strong, sec.admin_token_set ? (sec.admin_token_strong ? "Strong admin password (ADMIN_TOKEN) is set" : "Admin password is too short: use at least 16 random characters") : "No admin password (ADMIN_TOKEN) set"),
+          ok(!sec.open_dev_mode, sec.open_dev_mode ? "Open development mode is ON: anyone can make changes" : "Changes require a key"),
+          ok(!sec.private_network_urls_allowed, sec.private_network_urls_allowed ? "Webhooks may target private networks (ALLOW_PRIVATE_NETWORK_URLS)" : "Webhooks and link checks can't reach internal networks"),
+          ok(true, `Rate limits: ${sec.rate_limits.readsPerMinute} reads / ${sec.rate_limits.writesPerMinute} changes per minute per IP; sign-in locked after ${sec.rate_limits.authFailuresPer15Min} bad keys in 15 min`),
+          ok(true, `Browser access (CORS): ${sec.cors_origins.join(", ")}`),
+          ok(true, `Exports are ${sec.public_exports ? "public (no personal data)" : "key-only"}`)),
+        h("p", { class: "muted small" }, `Last 24 hours: ${sec.last_24h.changes} changes, ${sec.last_24h.denied} denied requests, ${sec.last_24h.throttled} rate-limited. Details: SECURITY.md in the repository.`)),
+      h("div", { class: "card" }, h("div", { class: "row between" }, h("h2", { style: { margin: 0 } }, "Audit log"),
+        h("label", { class: "inline" }, rejectedOnly, "Only denied / rate-limited")),
+        h("p", { class: "muted small" }, "Every change and every rejected request, kept 180 days. No passwords, keys or request contents are recorded."),
+        logBox));
+    renderLog(log);
   }
 
   show(mainTabs.current);

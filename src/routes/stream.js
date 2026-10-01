@@ -1,6 +1,11 @@
 const { Router } = require("express");
 const { bus } = require("../lib/bus");
-const { optInt } = require("../lib/http");
+const { optInt, HttpError } = require("../lib/http");
+const config = require("../config");
+
+// Each viewer holds one connection open; cap them so one client (or a flood)
+// can't exhaust the server.
+const open = { total: 0, byIp: new Map() };
 const data = require("../services/data");
 
 const router = Router();
@@ -31,6 +36,10 @@ function summary(msg) {
  *   (neither)         summaries for every game
  */
 router.get("/stream", async (req, res) => {
+  const ipCount = open.byIp.get(req.ip) || 0;
+  if (ipCount >= config.rateLimits.streamsPerIp || open.total >= config.rateLimits.streamsTotal) {
+    throw new HttpError(429, "too many live connections; close some tabs and try again");
+  }
   const gameId = optInt(req.query.game_id, "game_id", { min: 1 });
   const tournamentId = optInt(req.query.tournament_id, "tournament_id", { min: 1 });
   const initial = gameId ? await data.gameSnapshot(gameId) : null;
@@ -60,9 +69,15 @@ router.get("/stream", async (req, res) => {
   };
   bus.on("game", onGame);
   bus.on("domain", onDomain);
+  open.total += 1;
+  open.byIp.set(req.ip, (open.byIp.get(req.ip) || 0) + 1);
   // Heroku drops idle connections after 55s.
   const heartbeat = setInterval(() => res.write(`: ping ${Date.now()}\n\n`), 20000);
   req.on("close", () => {
+    open.total -= 1;
+    const n = (open.byIp.get(req.ip) || 1) - 1;
+    if (n <= 0) open.byIp.delete(req.ip);
+    else open.byIp.set(req.ip, n);
     clearInterval(heartbeat);
     bus.off("game", onGame);
     bus.off("domain", onDomain);

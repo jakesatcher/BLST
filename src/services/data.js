@@ -191,11 +191,29 @@ async function gameSnapshot(gameId) {
   return buildSnapshot(await loadGameBundle(gameId));
 }
 
+// Short-lived cache: stats/export endpoints are public and fairly heavy, so
+// repeated requests in the same couple of seconds share one computation.
+// Any change to a game or roster clears it.
+const STATS_TTL_MS = 3000;
+const statsCache = new Map();
+require("../lib/bus").bus.on("game", () => statsCache.clear());
+require("../lib/bus").bus.on("domain", () => statsCache.clear());
+
+async function tournamentStats(tournamentId) {
+  const key = Number(tournamentId);
+  const hit = statsCache.get(key);
+  if (hit && hit.expires > Date.now()) return hit.value;
+  const value = computeTournamentStats(key);
+  statsCache.set(key, { value, expires: Date.now() + STATS_TTL_MS });
+  value.catch(() => statsCache.delete(key));
+  return value;
+}
+
 /**
  * Loads every started game in a tournament in three queries and computes
  * standings plus per-player totals.
  */
-async function tournamentStats(tournamentId) {
+async function computeTournamentStats(tournamentId) {
   const tournament = await getTournament(tournamentId);
   const [teams, games] = await Promise.all([
     db.many("SELECT * FROM teams WHERE tournament_id = $1 ORDER BY seed NULLS LAST, name", [tournamentId]),

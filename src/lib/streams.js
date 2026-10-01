@@ -1,4 +1,5 @@
 const { badRequest } = require("./http");
+const { safeFetch } = require("./netguard");
 
 /**
  * Cleans up a pasted video link so it can be played on the watch page:
@@ -63,14 +64,16 @@ function isLiveBarn(url) {
  * response headers are looked at; nothing from the page is returned.
  * embeddable: true | false | null (couldn't tell).
  */
-async function checkEmbeddable(url, { timeoutMs = 8000 } = {}) {
+async function checkEmbeddable(url, { timeoutMs = 8000, allowPrivate } = {}) {
   const kind = embedKind(url);
   if (kind === "hls" || kind === "video") return { embeddable: true, kind, reason: "Direct video file: plays in the built-in player (the host must allow cross-site playback)." };
   let res;
   try {
-    res = await fetch(url, { method: "GET", redirect: "follow", headers: { "user-agent": "BLST-embed-check/1.0" }, signal: AbortSignal.timeout(timeoutMs) });
+    // SSRF-safe: only public addresses, every redirect hop re-checked.
+    res = await safeFetch(url, { method: "GET", headers: { "user-agent": "BLST-embed-check/1.0" }, signal: AbortSignal.timeout(timeoutMs) }, { maxRedirects: 3, allowPrivate });
   } catch (err) {
-    return { embeddable: null, kind, reason: `Couldn't reach the link (${err.message}). It may still work in a browser.` };
+    if (err.status === 400) return { embeddable: false, kind, reason: err.message };
+    return { embeddable: null, kind, reason: "Couldn't reach the link. It may still work in a browser." };
   }
   res.body?.cancel().catch(() => {});
   const xfo = (res.headers.get("x-frame-options") || "").toLowerCase();

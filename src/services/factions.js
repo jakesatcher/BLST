@@ -75,6 +75,7 @@ function pointsConfig(t) {
 /** Links a tournament to a Factions Event, creating the event if no id is given. */
 async function linkTournament(tournamentId, { event_id: eventId } = {}) {
   const t = await data.getTournament(tournamentId);
+  if (eventId && !/^[A-Za-z0-9_-]{1,100}$/.test(eventId)) throw new HttpError(400, "event id may only contain letters, digits, - and _");
   let id = eventId;
   if (!id) {
     const toIso = (d) => (d ? new Date(`${d}T00:00:00Z`).toISOString() : undefined);
@@ -83,7 +84,8 @@ async function linkTournament(tournamentId, { event_id: eventId } = {}) {
       startDate: toIso(t.start_date),
       endDate: toIso(t.end_date),
     });
-    id = event.id;
+    id = event && (typeof event.id === "string" || typeof event.id === "number") && String(event.id).length <= 200 ? String(event.id) : null;
+    if (!id || !/^[A-Za-z0-9_-]+$/.test(id)) throw new HttpError(502, "Factions returned an unexpected event id");
   }
   await db.query("UPDATE tournaments SET factions_event_id = $2, updated_at = now() WHERE id = $1", [tournamentId, id]);
   await log(tournamentId, "link", true, { event_id: id, created: !eventId });
@@ -109,8 +111,12 @@ async function syncPlayers(tournamentId) {
     }
     try {
       const remote = await request("POST", "/players", { email: p.email, displayName: `${p.first_name} ${p.last_name}` });
+      // Don't trust the remote shape blindly before storing it.
+      const remoteId = remote && typeof remote.id === "string" && remote.id.length <= 512 && /^[A-Za-z0-9_-]+$/.test(remote.id) ? remote.id : null;
+      const slug = remote && (remote.orderSlug || remote.order?.slug);
+      if (!remoteId) throw new Error("Factions returned an unexpected player id");
       await db.query("UPDATE players SET factions_player_id = $2, factions_order = $3, updated_at = now() WHERE id = $1", [
-        p.id, remote.id, remote.orderSlug || remote.order?.slug || null,
+        p.id, remoteId, typeof slug === "string" && /^[a-z0-9-]{1,40}$/.test(slug) ? slug : null,
       ]);
       result.synced += 1;
     } catch (err) {

@@ -1,19 +1,37 @@
 {
-  "name": "BLST — BLPA Live Scoring",
+  "name": "BLST \u2014 BLPA Live Scoring",
   "description": "Live scoring and stat tracking for BLPA hockey tournaments, with an iPad-friendly scorekeeper and public live scoreboards.",
   "repository": "https://github.com/jakesatcher/BLST",
-  "keywords": ["hockey", "scoring", "stats", "express", "postgres"],
+  "keywords": [
+    "hockey",
+    "scoring",
+    "stats",
+    "express",
+    "postgres"
+  ],
   "stack": "heroku-24",
-  "buildpacks": [{ "url": "heroku/nodejs" }],
-  "formation": { "web": { "quantity": 1 } },
-  "addons": [{ "plan": "heroku-postgresql:essential-0" }],
+  "buildpacks": [
+    {
+      "url": "heroku/nodejs"
+    }
+  ],
+  "formation": {
+    "web": {
+      "quantity": 1
+    }
+  },
+  "addons": [
+    {
+      "plan": "heroku-postgresql:essential-0"
+    }
+  ],
   "env": {
     "ADMIN_TOKEN": {
-      "description": "Admin password for the web app. Auto-generated: find it later under Settings → Reveal Config Vars.",
+      "description": "Admin password for the web app. Auto-generated: find it later under Settings \u2192 Reveal Config Vars.",
       "generator": "secret"
     },
     "SEED_DEMO": {
-      "description": "\"true\" loads a demo tournament (4 teams, 2 finished games, 1 live game) on first deploy so you can try things out. Delete it from Admin → Settings when you're done.",
+      "description": "\"true\" loads a demo tournament (4 teams, 2 finished games, 1 live game) on first deploy so you can try things out. Delete it from Admin \u2192 Settings when you're done.",
       "value": "true",
       "required": false
     },
@@ -35,6 +53,16 @@
     "FACTIONS_AUTO_SYNC": {
       "description": "Optional: \"true\" pushes results to Factions automatically after every final.",
       "value": "false",
+      "required": false
+    },
+    "SECURITY_CONTACT": {
+      "description": "Optional: where people should report security problems, e.g. mailto:security@example.org (published at /.well-known/security.txt).",
+      "value": "",
+      "required": false
+    },
+    "CORS_ORIGINS": {
+      "description": "Optional: comma-separated websites allowed to call the API from a browser. * = any (default).",
+      "value": "*",
       "required": false
     }
   },

@@ -6,6 +6,8 @@ const express = require("express");
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL || "postgresql://blst:blst@localhost:5432/blst_test";
 process.env.ADMIN_TOKEN = "test-admin-token";
 process.env.PUBLIC_EXPORTS = "true";
+// Test receivers (webhooks, mock Factions) listen on 127.0.0.1.
+process.env.ALLOW_PRIVATE_NETWORK_URLS = "true";
 
 const ADMIN = process.env.ADMIN_TOKEN;
 

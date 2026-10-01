@@ -2,19 +2,35 @@ const path = require("path");
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
+const config = require("./config");
+const db = require("./db");
 const { authenticate } = require("./middleware/auth");
 const { HttpError, pgToHttp } = require("./lib/http");
+const { rateLimit } = require("./lib/rateLimit");
+
+const WRITE_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
 function createApp() {
   const app = express();
+  app.disable("x-powered-by");
+  // Heroku's router is the single trusted proxy: req.ip / req.protocol come
+  // from its X-Forwarded-* headers, nothing further upstream is trusted.
   app.set("trust proxy", 1);
+
+  // Plain HTTP is redirected to HTTPS once deployed (HSTS takes over after).
+  if (config.deployed) {
+    app.use((req, res, next) => {
+      if (req.secure || req.path === "/health") return next();
+      res.redirect(308, `https://${req.headers.host}${req.originalUrl}`);
+    });
+  }
+
   app.use(
     helmet({
       contentSecurityPolicy: {
         directives: {
           "default-src": ["'self'"],
-          // hls.js (only loaded on the watch page, for HLS streams outside Safari).
-          "script-src": ["'self'", "https://cdn.jsdelivr.net"],
+          "script-src": ["'self'"],
           "style-src": ["'self'", "'unsafe-inline'"],
           "img-src": ["'self'", "data:", "blob:"],
           // Watch page: embedded players and video from the stream host.
@@ -22,14 +38,36 @@ function createApp() {
           "media-src": ["'self'", "https:", "blob:"],
           "connect-src": ["'self'", "https:"],
           "worker-src": ["'self'", "blob:"],
+          "object-src": ["'none'"],
+          "base-uri": ["'self'"],
+          "form-action": ["'self'"],
+          "frame-ancestors": ["'self'"],
         },
       },
+      strictTransportSecurity: { maxAge: 31536000, includeSubDomains: true },
+      referrerPolicy: { policy: "strict-origin-when-cross-origin" },
     }),
   );
-  // Read APIs and the export API are meant to be called from other sites.
-  app.use("/api", cors());
-  app.use(express.json({ limit: "10mb" }));
-  app.use(express.text({ type: ["text/csv", "text/plain"], limit: "10mb" }));
+  app.use((_req, res, next) => {
+    res.set("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()");
+    next();
+  });
+
+  // Reads and the export API are meant to be called from other sites.
+  // Credentials are bearer tokens (never cookies), so CORS isn't what
+  // protects writes; CORS_ORIGINS can still narrow it.
+  const allowAll = config.corsOrigins.includes("*");
+  app.use("/api", cors({
+    origin: allowAll ? "*" : config.corsOrigins,
+    exposedHeaders: ["RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Reset", "Retry-After", "Content-Disposition"],
+    maxAge: 600,
+  }));
+
+  // Body size limits: large uploads only where they're needed.
+  const big = { limit: "10mb" };
+  app.use("/api/v1/import", express.json(big), express.text({ type: ["text/csv", "text/plain"], ...big }));
+  app.use(express.json({ limit: "1mb" }));
+  app.use(express.text({ type: ["text/csv", "text/plain"], limit: "1mb" }));
   // A raw CSV body is accepted anywhere JSON { csv } is.
   app.use((req, _res, next) => {
     if (typeof req.body === "string") req.body = { csv: req.body, ...req.query };
@@ -38,9 +76,24 @@ function createApp() {
   });
 
   app.get("/health", (_req, res) => res.json({ status: "ok" }));
+  if (config.securityContact) {
+    app.get("/.well-known/security.txt", (_req, res) => {
+      const expires = new Date(Date.now() + 365 * 86400e3).toISOString();
+      res.type("text/plain").send(`Contact: ${config.securityContact}\nExpires: ${expires}\nPreferred-Languages: en\n`);
+    });
+  }
 
   const api = express.Router();
+  api.use(auditTrail);
+  api.use(rateLimit({ windowMs: 60_000, max: config.rateLimits.readsPerMinute, name: "requests" }));
+  api.use(rateLimit({ windowMs: 60_000, max: config.rateLimits.writesPerMinute, name: "changes", skip: (req) => !WRITE_METHODS.has(req.method) }));
+  api.use("/import", rateLimit({ windowMs: 60_000, max: config.rateLimits.importsPerMinute, name: "imports", skip: (req) => req.method !== "POST" }));
   api.use(authenticate);
+  // Responses to signed-in callers may contain private data: never cache them.
+  api.use((req, res, next) => {
+    if (req.auth.role || req.get("authorization")) res.set("Cache-Control", "no-store");
+    next();
+  });
   api.use(require("./routes/media"));
   api.use(require("./routes/streams"));
   api.use(require("./routes/tournaments"));
@@ -52,7 +105,12 @@ function createApp() {
   api.use((_req, _res, next) => next(new HttpError(404, "not found")));
   app.use("/api/v1", api);
 
-  app.use(express.static(path.join(__dirname, "..", "public"), { extensions: ["html"] }));
+  // hls.js is served from our own origin (no third-party scripts).
+  app.get("/vendor/hls.min.js", (_req, res) => {
+    res.set("Cache-Control", "public, max-age=86400");
+    res.sendFile(require.resolve("hls.js/dist/hls.min.js"));
+  });
+  app.use(express.static(path.join(__dirname, "..", "public"), { extensions: ["html"], dotfiles: "ignore" }));
 
   // eslint-disable-next-line no-unused-vars
   app.use((err, req, res, _next) => {
@@ -60,10 +118,31 @@ function createApp() {
     if (err.type === "entity.too.large") err = new HttpError(413, "request body too large");
     const http = pgToHttp(err);
     if (http) return res.status(http.status).json({ error: http.message, ...(http.details ? { details: http.details } : {}) });
+    // Unexpected errors: details go to the server log only, never the client.
     console.error(err);
     res.status(500).json({ error: "internal server error" });
   });
   return app;
+}
+
+/**
+ * Security audit trail: every change and every rejected request
+ * (401/403/429), with who made it. Paths only: no query strings, bodies
+ * or tokens are recorded.
+ */
+function auditTrail(req, res, next) {
+  res.on("finish", () => {
+    const rejected = [401, 403, 429].includes(res.statusCode);
+    if (!WRITE_METHODS.has(req.method) && !rejected) return;
+    const a = req.auth || {};
+    if (rejected) console.warn(`[security] ${res.statusCode} ${req.method} ${req.baseUrl}${req.path} ip=${req.ip} actor=${a.actor || a.via || "anonymous"}`);
+    db.query(
+      "INSERT INTO audit_log (actor, role, key_id, method, path, status, ip, user_agent) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+      [a.actor || a.via || "anonymous", a.role || null, a.keyId || null, req.method, `${req.baseUrl}${req.path}`.slice(0, 300),
+        res.statusCode, req.ip, (req.get("user-agent") || "").slice(0, 200)],
+    ).catch((err) => console.error("audit log write failed", err.message));
+  });
+  next();
 }
 
 module.exports = { createApp };

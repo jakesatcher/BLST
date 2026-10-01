@@ -24,6 +24,14 @@
     if (token) headers.authorization = `Bearer ${token}`;
     if (body !== undefined) headers["content-type"] = "application/json";
     const res = await fetch(`/api/v1${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    // A stored key that was revoked or expired: forget it and retry public reads.
+    if (res.status === 401 && token) {
+      const peek = await res.clone().json().catch(() => ({}));
+      if (/invalid, expired or revoked/.test(peek.error || "")) {
+        setToken("");
+        if (method === "GET") return api(method, path, body);
+      }
+    }
     if (res.status === 204) return null;
     const type = res.headers.get("content-type") || "";
     const data = type.includes("json") ? await res.json() : await res.text();

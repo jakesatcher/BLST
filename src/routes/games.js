@@ -1,6 +1,6 @@
 const { Router } = require("express");
 const db = require("../db");
-const { requireRole } = require("../middleware/auth");
+const { requireRole, assertTournamentScope } = require("../middleware/auth");
 const { badRequest, conflict, intParam, optInt, optEnum, optString, buildUpdate } = require("../lib/http");
 const { emitDomain } = require("../lib/bus");
 const data = require("../services/data");
@@ -10,7 +10,14 @@ const streams = require("../lib/streams");
 
 const router = Router();
 const admin = requireRole("admin");
-const scorekeeper = requireRole("scorekeeper");
+// Scorekeeper routes act on one game: the key must be allowed to score in
+// that game's tournament (object-level authorization).
+async function scopeGame(req, _res, next) {
+  const game = await data.getGame(intParam(req.params.id));
+  assertTournamentScope(req, game.tournament_id);
+  next();
+}
+const scorekeeper = [requireRole("scorekeeper"), scopeGame];
 const GAME_TYPES = ["pool", "playoff", "final", "exhibition"];
 
 function parseDate(v, name) {

@@ -29,7 +29,8 @@
   }
 
   async function renderPicker() {
-    const games = await get("/games");
+    // A key limited to one tournament only sees that tournament's games.
+    const games = (await get("/games")).filter((g) => !me.tournament_id || g.tournament_id === me.tournament_id);
     const card = (g) => h("a", { class: "card", href: `/scorekeeper.html?game=${g.id}` },
       h("div", { class: "row between" }, statusBadge(g), h("span", { class: "muted small" }, fmtDate(g.scheduled_at))),
       h("div", { class: "teams", style: { marginTop: "8px" } }, BLST.gameTeamMark(g, "away"), g.away_team, g.status !== "scheduled" ? ` ${g.away_score}` : ""),

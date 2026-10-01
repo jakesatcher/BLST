@@ -1,6 +1,7 @@
 const crypto = require("crypto");
 const db = require("../db");
 const { bus } = require("../lib/bus");
+const { safeFetch } = require("../lib/netguard");
 
 // Outbound webhooks: every domain event (game.final, game.event.created,
 // roster.moved, ...) is POSTed as JSON to each active subscriber whose
@@ -42,7 +43,9 @@ async function attempt(hook, deliveryId, event, body, n) {
   let code = null;
   let error = null;
   try {
-    const res = await fetch(hook.url, {
+    // Re-checked at send time (DNS can change after the URL was saved);
+    // redirects are not followed.
+    const res = await safeFetch(hook.url, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -54,7 +57,8 @@ async function attempt(hook, deliveryId, event, body, n) {
       },
       body,
       signal: AbortSignal.timeout(settings.timeoutMs),
-    });
+    }, { maxRedirects: 0 });
+    res.body?.cancel().catch(() => {});
     code = res.status;
     if (!res.ok) error = `HTTP ${res.status}`;
   } catch (err) {

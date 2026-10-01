@@ -65,7 +65,10 @@ function toCsv(rows, columns) {
   const cols = columns || (rows[0] ? Object.keys(rows[0]) : []);
   const esc = (v) => {
     if (v === null || v === undefined) return "";
-    const s = typeof v === "object" ? JSON.stringify(v) : String(v);
+    let s = typeof v === "object" ? JSON.stringify(v) : String(v);
+    // CSV/formula injection (OWASP): text starting with = + - @ or a control
+    // character would run as a formula in Excel/Sheets. Numbers stay numbers.
+    if (typeof v === "string" && /^[=+\-@\t\r]/.test(s)) s = `'${s}`;
     return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   return [cols.join(","), ...rows.map((r) => cols.map((c) => esc(r[c])).join(","))].join("\r\n") + "\r\n";

@@ -1,7 +1,7 @@
 const { Router } = require("express");
 const config = require("../config");
 const db = require("../db");
-const { requireRole } = require("../middleware/auth");
+const { requireRole, assertTournamentScope } = require("../middleware/auth");
 const { intParam, optEnum, notFound } = require("../lib/http");
 const { toCsv } = require("../lib/csv");
 const data = require("../services/data");
@@ -9,7 +9,10 @@ const importer = require("../services/importer");
 
 const router = Router();
 const admin = requireRole("admin");
-const exportAccess = (req, res, next) => (config.publicExports ? next() : requireRole("readonly")(req, res, next));
+const exportAccess = (req, res, next) => {
+  if (req.params.id && req.path.startsWith("/export/tournaments/")) assertTournamentScope(req, req.params.id);
+  return config.publicExports ? next() : requireRole("readonly")(req, res, next);
+};
 
 // ---------------------------------------------------------------------------
 // Import

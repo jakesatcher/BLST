@@ -43,7 +43,7 @@ npm run seed                  # optional demo tournament: 4 teams, 2 final games
 npm run dev                   # http://localhost:3000
 ```
 
-If `ADMIN_TOKEN` is unset, every write is open. That's for local development only, and the server refuses to boot on Heroku that way (same rule as BLPA Factions).
+If `ADMIN_TOKEN` is unset, BLST **fails closed**: nothing can be changed. For quick local experiments, set `ALLOW_OPEN_DEV=true` to allow changes without a key. That flag is ignored when deployed, and a deployed server refuses to start without a strong `ADMIN_TOKEN` (16 or more characters).
 
 ### Tests
 
@@ -160,6 +160,17 @@ Re-broadcasting LiveBarn video needs LiveBarn's permission. The overlay is meant
 4. **API keys.** Create a *scorekeeper* key for each rink device.
 5. **Scorekeeper.** Pick the game and press **Start game**, which snapshots the lineups and sets the starting goalies. Press Space to start and stop the clock. Tap **Goal**, then tap scorer → A1 → A2 by jersey number. Time is captured when you tap and can be edited.
 6. **After playoffs.** Set each team's **Final place**, then use **Factions sync → Push**, or turn on auto-push.
+
+## Security
+
+BLST follows the OWASP Top 10 (2021) and OWASP API Security Top 10 (2023). See **[SECURITY.md](SECURITY.md)** for the control-by-control mapping, the operator checklist and residual risks. In short:
+- **Keys:** scoped, expiring API keys; brute-force lockout.
+- **Limits:** rate and size limits.
+- **Network:** SSRF protection for webhooks and link checks.
+- **Browser:** strict security headers and CSP, with no third-party scripts.
+- **Audit log:** every change and every denied request, viewable under **Admin → Security**.
+
+CI runs the full test suite (including `test/security.test.js`) and `npm audit` on every push.
 
 ## API
 

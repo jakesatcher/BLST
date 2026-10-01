@@ -2,7 +2,8 @@ const crypto = require("crypto");
 const { Router } = require("express");
 const db = require("../db");
 const { requireRole, hashKey, generateKey } = require("../middleware/auth");
-const { badRequest, notFound, intParam, optEnum, optString, optBool, requireFields, buildUpdate } = require("../lib/http");
+const { badRequest, notFound, intParam, optInt, optEnum, optString, optBool, requireFields, buildUpdate } = require("../lib/http");
+const { assertPublicUrl } = require("../lib/netguard");
 const webhooks = require("../services/webhooks");
 const factions = require("../services/factions");
 
@@ -10,24 +11,33 @@ const router = Router();
 const admin = requireRole("admin");
 
 router.get("/me", (req, res) => {
-  res.json({ role: req.auth.role, via: req.auth.via, key_name: req.auth.keyName || null });
+  res.json({ role: req.auth.role, via: req.auth.via, key_name: req.auth.keyName || null, tournament_id: req.auth.tournamentId || null });
 });
 
 // ---------------------------------------------------------------------------
 // API keys. The plaintext key is only returned once, at creation.
 
 router.get("/admin/api-keys", admin, async (_req, res) => {
-  res.json(await db.many("SELECT id, name, key_prefix, role, created_at, last_used_at, revoked_at FROM api_keys ORDER BY id"));
+  res.json(await db.many(
+    `SELECT k.id, k.name, k.key_prefix, k.role, k.created_at, k.last_used_at, k.revoked_at, k.expires_at, k.tournament_id, t.name AS tournament
+       FROM api_keys k LEFT JOIN tournaments t ON t.id = k.tournament_id ORDER BY k.id`,
+  ));
 });
 
 router.post("/admin/api-keys", admin, async (req, res) => {
   const name = optString(req.body.name, "name", { max: 80 });
   const role = optEnum(req.body.role, "role", ["admin", "scorekeeper", "readonly"]);
   if (!name || !role) throw badRequest("name and role are required");
+  const tournamentId = optInt(req.body.tournament_id, "tournament_id", { min: 1 }) ?? null;
+  const days = optInt(req.body.expires_in_days, "expires_in_days", { min: 1, max: 3650 }) ?? null;
+  if (tournamentId && role === "admin") throw badRequest("admin keys can't be limited to one tournament; use a scorekeeper key");
+  if (tournamentId && !(await db.one("SELECT 1 FROM tournaments WHERE id = $1", [tournamentId]))) throw badRequest("tournament not found");
   const key = generateKey();
   const row = await db.one(
-    "INSERT INTO api_keys (name, key_prefix, key_hash, role) VALUES ($1, $2, $3, $4) RETURNING id, name, key_prefix, role, created_at",
-    [name, key.slice(0, 12), hashKey(key), role],
+    `INSERT INTO api_keys (name, key_prefix, key_hash, role, tournament_id, expires_at)
+     VALUES ($1, $2, $3, $4, $5, CASE WHEN $6::int IS NULL THEN NULL ELSE now() + make_interval(days => $6::int) END)
+     RETURNING id, name, key_prefix, role, created_at, tournament_id, expires_at`,
+    [name, key.slice(0, 12), hashKey(key), role, tournamentId, days],
   );
   res.status(201).json({ ...row, key });
 });
@@ -39,6 +49,40 @@ router.delete("/admin/api-keys/:id", admin, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Security audit log
+
+router.get("/admin/audit-log", admin, async (req, res) => {
+  const limit = optInt(req.query.limit, "limit", { min: 1, max: 1000 }) || 200;
+  const onlyRejected = req.query.rejected === "true";
+  res.json(await db.many(
+    `SELECT id, at, actor, role, method, path, status, ip, user_agent FROM audit_log
+      ${onlyRejected ? "WHERE status IN (401, 403, 429)" : ""} ORDER BY id DESC LIMIT $1`,
+    [limit],
+  ));
+});
+
+router.get("/admin/security", admin, async (_req, res) => {
+  const config = require("../config");
+  const { MIN_ADMIN_TOKEN_LENGTH } = require("../middleware/auth");
+  const counts = await db.one(
+    `SELECT count(*) FILTER (WHERE status IN (401, 403)) AS denied, count(*) FILTER (WHERE status = 429) AS throttled,
+            count(*) FILTER (WHERE method <> 'GET' AND status < 400) AS changes
+       FROM audit_log WHERE at > now() - interval '24 hours'`,
+  );
+  res.json({
+    admin_token_set: Boolean(config.adminToken),
+    admin_token_strong: config.adminToken.length >= MIN_ADMIN_TOKEN_LENGTH,
+    open_dev_mode: !config.adminToken && config.allowOpenDev,
+    deployed: config.deployed,
+    public_exports: config.publicExports,
+    cors_origins: config.corsOrigins,
+    private_network_urls_allowed: config.allowPrivateUrls,
+    rate_limits: config.rateLimits,
+    last_24h: counts,
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Webhooks
 
 function parseEvents(v) {
@@ -46,19 +90,16 @@ function parseEvents(v) {
   const list = Array.isArray(v) ? v : String(v).split(",");
   const clean = list.map((x) => String(x).trim()).filter(Boolean);
   if (!clean.length) throw badRequest("events must list at least one event (or \"*\")");
+  if (clean.length > 50) throw badRequest("at most 50 event names");
+  if (clean.some((e) => !/^[a-z*][a-z0-9_.*]{0,63}$/i.test(e))) throw badRequest("event names may only contain letters, digits, dots, underscores and *");
   return clean;
 }
 
-function parseUrl(v) {
+/** Webhook targets must be public http(s) URLs (no internal network: SSRF). */
+async function parseUrl(v) {
   if (v === undefined) return undefined;
-  let u;
-  try {
-    u = new URL(v);
-  } catch {
-    throw badRequest("url is not valid");
-  }
-  if (!["http:", "https:"].includes(u.protocol)) throw badRequest("url must be http(s)");
-  return u.toString();
+  if (typeof v !== "string" || v.length > 2000) throw badRequest("url is not valid");
+  return (await assertPublicUrl(v.trim(), { label: "Webhook URL" })).toString();
 }
 
 const hide = (h) => ({ ...h, secret: h.secret ? `${h.secret.slice(0, 6)}…` : null });
@@ -68,7 +109,7 @@ router.get("/admin/webhooks", admin, async (_req, res) => {
 });
 
 router.post("/admin/webhooks", admin, async (req, res) => {
-  const fields = { name: optString(req.body.name, "name", { max: 80 }), url: parseUrl(req.body.url) };
+  const fields = { name: optString(req.body.name, "name", { max: 80 }), url: await parseUrl(req.body.url) };
   requireFields(fields, ["name", "url"]);
   const secret = optString(req.body.secret, "secret", { max: 200 }) || crypto.randomBytes(24).toString("hex");
   const hook = await db.one(
@@ -81,7 +122,7 @@ router.post("/admin/webhooks", admin, async (req, res) => {
 router.patch("/admin/webhooks/:id", admin, async (req, res) => {
   const upd = buildUpdate({
     name: optString(req.body.name, "name", { max: 80 }),
-    url: parseUrl(req.body.url),
+    url: await parseUrl(req.body.url),
     events: parseEvents(req.body.events),
     active: optBool(req.body.active, "active"),
     secret: optString(req.body.secret, "secret", { max: 200 }),

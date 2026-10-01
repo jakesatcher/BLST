@@ -54,7 +54,7 @@
       return;
     }
     // HLS outside Safari: load hls.js on demand.
-    const script = h("script", { src: "https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js" });
+    const script = h("script", { src: "/vendor/hls.min.js" });
     script.onload = () => {
       if (!window.Hls || !window.Hls.isSupported()) return toast("This browser can't play the stream", true);
       const hls = new window.Hls({ liveSyncDurationCount: 3 });
