@@ -123,7 +123,7 @@ The button uses this branch. After the branch is merged, change the URL's `tree/
 
 That makes you the **global admin**. From then on `ADMIN_TOKEN` no longer works as a password: every admin signs in with an emailed code **and** a texted code.
 
-**Email and text messages.** Set `SMTP_URL` and `EMAIL_FROM` (any SMTP service: Postmark, SendGrid, Mailgun, Amazon SES) and the Twilio vars (`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`). Until they're set, the Deploy button's `AUTH_LOG_CODES=true` prints codes in the Heroku log (`heroku logs --tail`) so you can test. Set `AUTH_LOG_CODES=false` once real sending works.
+**Email and text messages.** Set `RESEND_API_KEY` (or `SMTP_URL`, any SMTP service) and `EMAIL_FROM` and the Twilio vars (`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`). Until they're set, the Deploy button's `AUTH_LOG_CODES=true` prints codes in the Heroku log (`heroku logs --tail`) so you can test. Set `AUTH_LOG_CODES=false` once real sending works.
 
 ### From the command line
 

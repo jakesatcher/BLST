@@ -102,17 +102,48 @@ ends in `.railway.internal`.
 
 ## After deploying
 
-Sign-in codes are written to the `blst` logs until email and text messages are
-set up. That's what lets you create the first admin before then. To send real
-codes:
+**Sign-in codes are written to the Deploy Logs** until email and text
+messages are set up, so you can create the first admin straight away. In the
+service's **Deploy Logs**, look for lines like:
+
+```
+[dev email to you@example.com] 123456 is your BLST code
+[dev sms to +15551234567] Your BLST code is 123456. It expires in 10 min. …
+```
+
+Each code works for 10 minutes; asking again sends a new one.
+
+### Real email and texts
+
+**Email: Resend** (recommended on Railway: it sends over HTTPS, and Railway
+allows outbound SMTP only on Pro plans and above).
+1. Sign up at resend.com and add your domain (e.g. `beerleaguestats.hockey`);
+   add the DNS records it shows and wait for it to verify.
+2. Create an API key (sending access).
+3. Set `RESEND_API_KEY=re_...` and `EMAIL_FROM='Beer League Stats <no-reply@beerleaguestats.hockey>'`
+   (the address must be on the verified domain).
+
+On a Pro plan any SMTP service also works: `SMTP_URL='smtps://USER:PASS@smtp.example.com:465'`.
+
+**Texts: Twilio.**
+1. Create a Twilio account and buy a phone number with SMS.
+2. US numbers need **A2P 10DLC** registration (brand + campaign) before texts
+   are delivered; a **toll-free** number needs toll-free verification instead.
+   Approval takes days, so start early. Trial accounts only text numbers you've
+   verified in Twilio.
+3. Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and `TWILIO_FROM_NUMBER`
+   (`+1...`), or `TWILIO_MESSAGING_SERVICE_SID` instead of the number.
 
 ```bash
-railway variable set --service blst SMTP_URL='smtps://USER:PASS@smtp.example.com:465' EMAIL_FROM='BLST <no-reply@example.org>'
+railway variable set --service blst RESEND_API_KEY=re_... EMAIL_FROM='Beer League Stats <no-reply@beerleaguestats.hockey>'
 railway variable set --service blst TWILIO_ACCOUNT_SID=AC... TWILIO_AUTH_TOKEN=... TWILIO_FROM_NUMBER=+15551234567
 ```
 
-Once those are set, codes are sent and never logged. Without the CLI, write
-`npx @railway/cli` instead of `railway`, or use the service's **Variables** tab.
+Without the CLI, write `npx @railway/cli` instead of `railway`, or use the
+service's **Variables** tab. Once a channel has a provider, its codes are
+sent and never logged. If sending fails, the reason is in the Deploy Logs
+(`email send failed: …` or `sms send failed: …`). When both work, set
+`AUTH_LOG_CODES=false`.
 
 Optional:
 - LeagueApps variables (see the README), which also import every LeagueApps

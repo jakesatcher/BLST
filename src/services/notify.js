@@ -9,7 +9,27 @@ const outbox = [];
 let transport = null;
 
 function emailConfigured() {
-  return Boolean(config.email.smtpUrl);
+  return Boolean(config.email.resendApiKey || config.email.smtpUrl);
+}
+
+async function sendViaResend(to, subject, text) {
+  let res;
+  try {
+    res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { authorization: `Bearer ${config.email.resendApiKey}`, "content-type": "application/json" },
+      body: JSON.stringify({ from: config.email.from, to: [to], subject, text }),
+      signal: AbortSignal.timeout(15000),
+    });
+  } catch (err) {
+    console.error("email send failed:", err.message);
+    throw new HttpError(502, "Couldn't send the email. Try again in a minute.");
+  }
+  if (!res.ok) {
+    const detail = (await res.text().catch(() => "")).slice(0, 300);
+    console.error(`email send failed: Resend ${res.status} ${detail}`);
+    throw new HttpError(502, "Couldn't send the email. Try again in a minute.");
+  }
 }
 function smsConfigured() {
   const s = config.sms;
@@ -33,6 +53,7 @@ function devDeliver(channel, to, text) {
 
 async function sendEmail(to, subject, text) {
   if (!emailConfigured()) return devDeliver("email", to, `${subject}\n${text}`);
+  if (config.email.resendApiKey) return sendViaResend(to, subject, text);
   if (!transport) transport = require("nodemailer").createTransport(config.email.smtpUrl);
   try {
     await transport.sendMail({ from: config.email.from, to, subject, text });

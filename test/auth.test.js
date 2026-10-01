@@ -315,3 +315,28 @@ test("admin sessions also end after 2 hours without use", async () => {
   const r = await call("GET", "/me", { token: s.token, ip: nextIp() });
   assert.equal(r.status, 401);
 });
+
+test("email can go through Resend's HTTPS API (for hosts that block SMTP)", async () => {
+  const config = require("../src/config");
+  const notify = require("../src/services/notify");
+  const realFetch = global.fetch;
+  const calls = [];
+  config.email.resendApiKey = "re_test_key";
+  try {
+    global.fetch = async (url, opts) => {
+      calls.push({ url, opts });
+      return new Response(JSON.stringify({ id: "x" }), { status: calls.length === 1 ? 200 : 422 });
+    };
+    assert.equal(notify.emailConfigured(), true);
+    await notify.sendEmail("someone@example.com", "123456 is your BLST code", "Your BLST code is 123456");
+    assert.equal(calls[0].url, "https://api.resend.com/emails");
+    assert.equal(calls[0].opts.headers.authorization, "Bearer re_test_key");
+    const body = JSON.parse(calls[0].opts.body);
+    assert.deepEqual(body.to, ["someone@example.com"]);
+    assert.equal(body.subject, "123456 is your BLST code");
+    await assert.rejects(notify.sendEmail("someone@example.com", "s", "t"), (err) => err.status === 502);
+  } finally {
+    global.fetch = realFetch;
+    config.email.resendApiKey = "";
+  }
+});

@@ -86,6 +86,9 @@ module.exports = {
   },
   email: {
     smtpUrl: process.env.SMTP_URL || "",
+    // Resend (https://resend.com) sends over HTTPS, which works where SMTP
+    // ports are blocked (Railway's Free, Trial and Hobby plans).
+    resendApiKey: process.env.RESEND_API_KEY || "",
     from: process.env.EMAIL_FROM || "BLST <no-reply@localhost>",
   },
   sms: {

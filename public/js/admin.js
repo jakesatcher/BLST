@@ -1431,7 +1431,7 @@
             : ok(!sec.admin_token_set || sec.admin_token_strong, sec.admin_token_set
               ? (sec.admin_token_strong ? "Strong setup key (ADMIN_TOKEN) is set" : "ADMIN_TOKEN is too short: use at least 16 random characters")
               : "A one-time setup key is printed in the server log at each start until the first admin exists"),
-          ok(sec.accounts.email_configured, sec.accounts.email_configured ? "Email codes are sent by SMTP" : "Email isn't set up (SMTP_URL): codes only appear in the server log"),
+          ok(sec.accounts.email_configured, sec.accounts.email_configured ? "Email codes are sent (Resend or SMTP)" : "Email isn't set up (RESEND_API_KEY or SMTP_URL): codes only appear in the server log"),
           ok(sec.accounts.sms_configured, sec.accounts.sms_configured ? `Text-message codes are sent by Twilio (countries: +${sec.accounts.sms_country_codes.join(", +")})` : "Text messages aren't set up (TWILIO_*): codes only appear in the server log"),
           ok(!sec.deployed || !sec.accounts.codes_in_log, sec.accounts.codes_in_log ? "Sign-in codes are printed in the server log (development)" : "Sign-in codes are never logged"),
           ok(true, sec.accounts.auth_secret_set ? "AUTH_SECRET is set" : "AUTH_SECRET was generated on first start and is kept in the database"),
