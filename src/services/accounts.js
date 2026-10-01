@@ -160,19 +160,23 @@ async function adminCount() {
 /** Whether the first global admin can still be created, and how. */
 async function setupStatus() {
   const needed = (await adminCount()) === 0;
-  return { needed, key_required: needed && !(config.allowOpenDev && !config.adminToken) };
+  return { needed, key_required: needed && !(config.allowOpenDev && !config.adminToken), key_source: config.adminToken ? "config" : "log" };
 }
 
 /**
  * First global admin. Allowed only while no admin account exists, and only
- * with the setup key (the ADMIN_TOKEN config var), then email + SMS codes.
+ * with the setup key (the ADMIN_TOKEN config var, or without it the key
+ * generated at boot and printed to the log), then email + SMS codes.
  */
 async function startSetup(setupKey, rawEmail, rawPhone) {
   const { safeEqual } = require("../middleware/auth");
   const status = await setupStatus();
   if (!status.needed) throw new HttpError(409, "An admin account already exists. Sign in, or ask an admin to make you one.");
-  if (status.key_required && (!config.adminToken || !setupKey || !safeEqual(setupKey, config.adminToken))) {
-    throw new HttpError(403, "That setup key isn't right. It's the ADMIN_TOKEN config var on the server.");
+  if (status.key_required) {
+    const ok = config.adminToken
+      ? Boolean(setupKey) && safeEqual(setupKey, config.adminToken)
+      : await require("./bootstrap").checkSetupKey(setupKey);
+    if (!ok) throw new HttpError(403, "That setup key isn't right. It's the ADMIN_TOKEN config var, or the setup key printed in the server log.");
   }
   return createChallenge({ purpose: "setup_admin", email: normEmail(rawEmail), phone: normPhone(rawPhone) });
 }

@@ -11,11 +11,13 @@ types.setTypeParser(20, (v) => Number(v));
 types.setTypeParser(1700, (v) => Number(v));
 
 let pool;
+// Set when the app switches to its least-privilege role (db/create-app-role.js).
+let runtimeUrl = null;
 
 function getPool() {
   if (!pool) {
     pool = new Pool({
-      connectionString: config.databaseUrl,
+      connectionString: runtimeUrl || config.databaseUrl,
       ssl: config.databaseSsl ? { rejectUnauthorized: false } : undefined,
       max: 10,
       // A runaway query or a stuck transaction can't hold a connection forever.
@@ -25,6 +27,14 @@ function getPool() {
     });
   }
   return pool;
+}
+
+/** Sends every later query through `url` (the least-privilege role). */
+async function useRuntimeUrl(url) {
+  const old = pool;
+  runtimeUrl = url;
+  pool = undefined;
+  if (old) await old.end().catch(() => {});
 }
 
 async function query(text, params) {
@@ -64,7 +74,9 @@ async function tx(fn) {
  * two instances that boot together (overlapping deploys) from both migrating.
  */
 async function migrate({ log = console.log } = {}) {
-  const url = config.migrationDatabaseUrl;
+  // Migrations always run as the owner login: DATABASE_MIGRATION_URL, or
+  // DATABASE_URL once the app's own queries use the restricted role.
+  const url = config.migrationDatabaseUrl || (runtimeUrl ? config.databaseUrl : "");
   const separate = Boolean(url) && url !== config.databaseUrl;
   const mpool = separate
     ? new Pool({ connectionString: url, ssl: config.databaseSsl ? { rejectUnauthorized: false } : undefined, max: 1 })
@@ -110,4 +122,4 @@ async function close() {
   }
 }
 
-module.exports = { getPool, query, one, many, tx, migrate, close };
+module.exports = { getPool, useRuntimeUrl, query, one, many, tx, migrate, close };

@@ -40,8 +40,9 @@ module.exports = {
   allowPrivateUrls: bool(process.env.ALLOW_PRIVATE_NETWORK_URLS, false),
   securityContact: process.env.SECURITY_CONTACT || "",
   auth: {
-    // Keys the one-time-code hashes. Set it in production so codes survive
-    // restarts; otherwise a random key is used per process.
+    // Keys the one-time-code hashes. Without the config var the server
+    // generates one on first boot and keeps it in the database
+    // (services/bootstrap.js); this random value covers scripts and tests.
     secret: process.env.AUTH_SECRET || require("crypto").randomBytes(32).toString("hex"),
     // Once an admin account exists, ADMIN_TOKEN stops granting admin access
     // (every admin must sign in with MFA) unless this break-glass is on.
@@ -51,9 +52,11 @@ module.exports = {
     // Comma-separated calling codes SMS may go to (blocks SMS-pumping fraud).
     smsCountryCodes: (process.env.SMS_ALLOWED_COUNTRY_CODES || "1").split(",").map((s) => s.trim().replace(/^\+/, "")).filter(Boolean),
     smsMaxPerHour: Number(process.env.SMS_MAX_PER_HOUR || 300),
-    // Development: print codes to the server log instead of sending them.
-    // Never on a deployed server unless explicitly allowed.
-    logCodes: bool(process.env.AUTH_LOG_CODES, !deployed),
+    // Without an email/SMS provider, print codes to the server log instead.
+    // On by default so the first admin can be set up before email/SMS are
+    // configured; it only ever applies to a channel with no provider.
+    // AUTH_LOG_CODES=false refuses to sign anyone in without providers.
+    logCodes: bool(process.env.AUTH_LOG_CODES, true),
     // Host name for the WebOTP line in texts ("@blst.example.com #123456"),
     // which lets phones offer the code automatically. Optional.
     appHost: (process.env.APP_HOST || process.env.RAILWAY_PUBLIC_DOMAIN || process.env.HEROKU_APP_DEFAULT_DOMAIN_NAME || "").replace(/^https?:\/\//, "").replace(/\/.*$/, ""),

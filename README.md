@@ -60,15 +60,21 @@ The suite covers the stat engine (penalty replay, PP/SH, GWG, goalie decisions, 
 
 ## Deploying to Railway
 
-One command creates Postgres and the app, with BLPA Factions built in. You can
-run it from this repo or the blpafactions repo:
+Nothing secret to configure: BLST generates its own secrets, sets up a
+least-privilege database login, and prints a one-time setup key to its log.
 
-```bash
-npm run railway
-```
+- **One click:** a Deploy-on-Railway button; [docs/RAILWAY.md](docs/RAILWAY.md)
+  shows how to make it once.
+- **One command**, from this repo or the blpafactions repo:
+  ```bash
+  npm run railway
+  ```
+  It creates Postgres and the app, waits for it to start, and prints the setup key.
+- **Dashboard:** add Postgres and this repo, set
+  `DATABASE_URL=${{Postgres.DATABASE_URL}}` and `PORT=8080`, then generate a domain.
 
-Let Railway's GitHub app read this repo first. **[docs/RAILWAY.md](docs/RAILWAY.md)**
-has the details, including the upgrade from the earlier two-app setup.
+Then open the site → **Admin & setup** → **Set up the admin account** with the
+setup key.
 
 ## Deploying to Heroku (for testing)
 

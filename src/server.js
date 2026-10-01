@@ -19,11 +19,16 @@ async function main() {
   // Earlier side-by-side deploys kept Factions in this database's "factions" schema.
   await require("./services/factionsImport").autoImportSharedSchema().catch((err) => console.error("Factions auto-import failed:", err.message));
   const accounts = require("./services/accounts");
-  if (config.deployed && !config.adminToken && (await accounts.setupStatus()).needed) {
-    throw new Error("ADMIN_TOKEN must be set before deploying, to create the first admin account (Heroku: heroku config:set ADMIN_TOKEN=...; Railway: railway variable set ADMIN_TOKEN=...)");
+  const bootstrap = require("./services/bootstrap");
+  // Nothing secret has to be configured: what isn't set is generated here.
+  await bootstrap.ensureAuthSecret();
+  await bootstrap.ensureSetupKey();
+  // Least privilege: requests run as a role that can't change the schema.
+  config.dbMode = await require("./db/create-app-role").ensureRuntimeRole();
+  const notify = require("./services/notify");
+  if (config.deployed && config.auth.logCodes && (!notify.emailConfigured() || !notify.smsConfigured())) {
+    console.warn("Email/SMS aren't fully set up: sign-in codes for those channels are written to this log. Set SMTP_URL and TWILIO_* (see docs/RAILWAY.md).");
   }
-  if (config.deployed && !process.env.AUTH_SECRET) console.warn("AUTH_SECRET is not set: sign-in codes in progress are lost on restart. Set it with: openssl rand -hex 32");
-  if (config.deployed && config.auth.logCodes) console.warn("AUTH_LOG_CODES=true on a deployed server: sign-in codes are written to the log.");
   const pruneAuth = () => accounts.prune().catch(() => {});
   setInterval(pruneAuth, 3600e3).unref();
   webhooks.start();
@@ -38,8 +43,7 @@ async function main() {
   app.listen(config.port, () => {
     console.log(`BLST listening on port ${config.port}${rearmed ? ` (${rearmed} running clock(s) restored)` : ""}`);
     if (!config.adminToken && config.allowOpenDev) console.warn("ADMIN_TOKEN is not set and ALLOW_OPEN_DEV=true: all write APIs are open (local development only)");
-    else if (!config.adminToken) console.warn("ADMIN_TOKEN is not set: sign in with an admin account (or set ALLOW_OPEN_DEV=true for local development).");
-    else if (config.adminToken.length < MIN_ADMIN_TOKEN_LENGTH) console.warn(`ADMIN_TOKEN is shorter than ${MIN_ADMIN_TOKEN_LENGTH} characters; deployed instances refuse to start with it.`);
+    else if (config.adminToken && config.adminToken.length < MIN_ADMIN_TOKEN_LENGTH) console.warn(`ADMIN_TOKEN is shorter than ${MIN_ADMIN_TOKEN_LENGTH} characters; deployed instances refuse to start with it.`);
   });
 }
 

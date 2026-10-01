@@ -89,6 +89,7 @@ router.get("/admin/security", admin, async (_req, res) => {
                                (SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()) AS tls
                           FROM pg_roles r WHERE r.rolname = current_user`)),
       separate_migration_login: Boolean(config.migrationDatabaseUrl),
+      mode: config.dbMode || null,
     },
     client_ip_header: config.clientIpHeader || null,
     platform: config.platform,
@@ -99,6 +100,7 @@ router.get("/admin/security", admin, async (_req, res) => {
       email_configured: require("../services/notify").emailConfigured(),
       sms_configured: require("../services/notify").smsConfigured(),
       auth_secret_set: Boolean(process.env.AUTH_SECRET),
+      auth_secret_source: process.env.AUTH_SECRET ? "config" : "database",
       codes_in_log: config.auth.logCodes,
       admin_token_retired: !config.auth.adminTokenBreakGlass,
       admin_token_break_glass: config.auth.adminTokenBreakGlass,

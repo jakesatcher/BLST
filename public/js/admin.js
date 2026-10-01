@@ -1342,15 +1342,17 @@
           ok(sec.accounts.admins > 0, sec.accounts.admins > 0 ? `${sec.accounts.admins} admin account(s), all signing in with email + text-message codes` : "No admin account yet: set one up (Account → Set up admin)"),
           sec.accounts.admins > 0
             ? ok(!sec.accounts.admin_token_break_glass, sec.accounts.admin_token_break_glass ? "ADMIN_TOKEN_BREAK_GLASS is on: the admin password works without MFA. Turn it off when you're done." : "Admin password (ADMIN_TOKEN) is retired: admins must use MFA")
-            : ok(sec.admin_token_set && sec.admin_token_strong, sec.admin_token_set ? (sec.admin_token_strong ? "Strong setup key (ADMIN_TOKEN) is set" : "ADMIN_TOKEN is too short: use at least 16 random characters") : "No ADMIN_TOKEN set, so no admin can be set up"),
+            : ok(!sec.admin_token_set || sec.admin_token_strong, sec.admin_token_set
+              ? (sec.admin_token_strong ? "Strong setup key (ADMIN_TOKEN) is set" : "ADMIN_TOKEN is too short: use at least 16 random characters")
+              : "A one-time setup key is printed in the server log at each start until the first admin exists"),
           ok(sec.accounts.email_configured, sec.accounts.email_configured ? "Email codes are sent by SMTP" : "Email isn't set up (SMTP_URL): codes only appear in the server log"),
           ok(sec.accounts.sms_configured, sec.accounts.sms_configured ? `Text-message codes are sent by Twilio (countries: +${sec.accounts.sms_country_codes.join(", +")})` : "Text messages aren't set up (TWILIO_*): codes only appear in the server log"),
           ok(!sec.deployed || !sec.accounts.codes_in_log, sec.accounts.codes_in_log ? "Sign-in codes are printed in the server log (development)" : "Sign-in codes are never logged"),
-          ok(!sec.deployed || sec.accounts.auth_secret_set, sec.accounts.auth_secret_set ? "AUTH_SECRET is set" : sec.deployed ? "AUTH_SECRET isn't set: sign-ins in progress are lost on restart" : "AUTH_SECRET isn't set (fine for local development)"),
+          ok(true, sec.accounts.auth_secret_set ? "AUTH_SECRET is set" : "AUTH_SECRET was generated on first start and is kept in the database"),
           ok(!sec.open_dev_mode, sec.open_dev_mode ? "Open development mode is ON: anyone can make changes" : "Changes require an account or key"),
           ok(!sec.database.superuser && !sec.database.can_change_schema,
             !sec.database.superuser && !sec.database.can_change_schema
-              ? `The app's database login ("${sec.database.role}") can only read and write rows`
+              ? `The app's database login ("${sec.database.role}") can only read and write rows${sec.database.mode === "auto" ? " (set up automatically)" : ""}`
               : `The app connects to the database as "${sec.database.role}"${sec.database.superuser ? ", a superuser" : ", which can change the schema"}. Run npm run db:app-role for a least-privilege login (see SECURITY.md)`),
           ok(sec.database.statement_timeout !== "0", `Database queries time out after ${sec.database.statement_timeout}`),
           ok(!sec.deployed || sec.database.tls || sec.platform === "railway",
