@@ -44,6 +44,8 @@
       media.append(h("iframe", {
         src: s.embed_url, title: "Live stream", allow: "autoplay; fullscreen; picture-in-picture; encrypted-media",
         allowfullscreen: true, referrerpolicy: "strict-origin-when-cross-origin",
+        // The embedded player can run and open popups, but never navigate this page away (tabnabbing).
+        sandbox: "allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox",
       }));
       return;
     }

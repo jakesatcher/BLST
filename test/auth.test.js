@@ -259,12 +259,16 @@ test("self-service: change phone with both factors, sign out everywhere, delete"
   assert.equal(s1.body.step, "sms");
   const s2 = await call("POST", "/auth/verify", { token: a.token, body: { challenge_id: start.body.challenge_id, code: codeFor("+15552010031") }, ip });
   assert.equal(s2.body.phone_changed, true);
+  assert.equal(s2.body.other_sessions_ended, 1, "a new phone ends the account's other sessions");
+  assert.equal((await call("GET", "/account", { token: b.token, ip: nextIp() })).status, 401);
+  assert.equal((await call("GET", "/account", { token: a.token, ip: nextIp() })).status, 200, "the session that changed it stays");
   assert.equal((await db.one("SELECT phone FROM accounts WHERE email = 'self@example.com'")).phone, "+15552010031");
 
   assert.equal((await call("POST", "/auth/logout", { token: a.token })).status, 204);
   assert.equal((await call("GET", "/account", { token: a.token, ip: nextIp() })).status, 401);
-  assert.equal((await call("POST", "/account/logout-all", { token: b.token })).body.ended, 1);
-  assert.equal((await call("GET", "/account", { token: b.token, ip: nextIp() })).status, 401);
+  const b2 = await signIn("self@example.com", "+15552010031");
+  assert.equal((await call("POST", "/account/logout-all", { token: b2.token })).body.ended, 1);
+  assert.equal((await call("GET", "/account", { token: b2.token, ip: nextIp() })).status, 401);
 
   const c = await signIn("self@example.com", "+15552010031");
   assert.equal((await call("DELETE", "/account", { token: c.token })).status, 204);
@@ -280,4 +284,12 @@ test("account routes need a signed-in account, not an API key", async () => {
   } finally {
     config.auth.adminTokenBreakGlass = false;
   }
+});
+
+test("admin sessions also end after 2 hours without use", async () => {
+  const s = await signIn("boss@example.com", "+15552010010");
+  assert.equal((await call("GET", "/me", { token: s.token, ip: nextIp() })).status, 200);
+  await db.query("UPDATE auth_sessions SET last_used_at = now() - interval '3 hours' WHERE account_id = $1", [s.account.id]);
+  const r = await call("GET", "/me", { token: s.token, ip: nextIp() });
+  assert.equal(r.status, 401);
 });

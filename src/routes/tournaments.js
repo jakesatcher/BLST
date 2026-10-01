@@ -1,6 +1,6 @@
 const { Router } = require("express");
 const db = require("../db");
-const { requireRole } = require("../middleware/auth");
+const { requireRole, hasRole } = require("../middleware/auth");
 const {
   badRequest, conflict, notFound, intParam, optInt, optEnum, optString, optBool, requireFields, buildUpdate,
 } = require("../lib/http");
@@ -12,6 +12,16 @@ const router = Router();
 const admin = requireRole("admin");
 
 const POSITIONS = ["C", "LW", "RW", "F", "D", "G"];
+
+// Integration settings and registration counters are admin business, not
+// public data (API3: return only what the caller needs).
+const ADMIN_ONLY_TOURNAMENT_FIELDS = ["leagueapps_program_ids", "registration_seq", "registration_prefix", "factions_points"];
+function publicTournament(t, req) {
+  if (hasRole(req, "admin")) return t;
+  const out = { ...t };
+  for (const k of ADMIN_ONLY_TOURNAMENT_FIELDS) delete out[k];
+  return out;
+}
 
 function tournamentFields(body) {
   return {
@@ -45,13 +55,13 @@ function defaultTeamName(i) {
 // ---------------------------------------------------------------------------
 // Tournaments
 
-router.get("/tournaments", async (_req, res) => {
+router.get("/tournaments", async (req, res) => {
   res.json(
-    await db.many(
+    (await db.many(
       `SELECT t.*, (SELECT count(*) FROM teams WHERE tournament_id = t.id) AS team_count,
               (SELECT count(*) FROM games WHERE tournament_id = t.id AND status IN ('live', 'intermission')) AS live_games
          FROM tournaments t ORDER BY t.start_date DESC NULLS LAST, t.id DESC`,
-    ),
+    )).map((t) => publicTournament(t, req)),
   );
 });
 
@@ -87,7 +97,7 @@ router.get("/tournaments/:id", async (req, res) => {
        FROM teams tm WHERE tournament_id = $1 ORDER BY seed NULLS LAST, name`,
     [t.id],
   );
-  res.json({ ...t, teams });
+  res.json({ ...publicTournament(t, req), teams });
 });
 
 router.patch("/tournaments/:id", admin, async (req, res) => {

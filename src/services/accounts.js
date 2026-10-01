@@ -198,7 +198,7 @@ async function loadChallenge(id) {
  * Checks a code. After the email step the SMS code is sent; after the SMS
  * step the flow completes and (except for a phone change) a session starts.
  */
-async function verify(challengeId, rawCode, { accountId } = {}) {
+async function verify(challengeId, rawCode, { accountId, sessionId } = {}) {
   const ch = await loadChallenge(challengeId);
   if (ch.purpose === "change_phone" && ch.account_id !== accountId) throw new HttpError(403, "Sign in as the account that asked for this change.");
   const code = String(rawCode || "").replace(/\s/g, "");
@@ -230,13 +230,15 @@ async function verify(challengeId, rawCode, { accountId } = {}) {
   // SMS step passed: consume the challenge so it can't be replayed.
   const used = await db.query("DELETE FROM auth_challenges WHERE id = $1", [ch.id]);
   if (!used.rowCount) throw new HttpError(409, "This code was already used.");
-  return complete(ch);
+  return complete(ch, { sessionId });
 }
 
-async function complete(ch) {
+async function complete(ch, { sessionId } = {}) {
   if (ch.purpose === "change_phone") {
     await db.query("UPDATE accounts SET phone = $2 WHERE id = $1", [ch.account_id, ch.phone]);
-    return { step: "done", phone_changed: true, account: await accountView(ch.account_id) };
+    // A new second factor ends every other session (OWASP session management).
+    const ended = (await db.query("DELETE FROM auth_sessions WHERE account_id = $1 AND id IS DISTINCT FROM $2", [ch.account_id, sessionId ?? null])).rowCount;
+    return { step: "done", phone_changed: true, other_sessions_ended: ended, account: await accountView(ch.account_id) };
   }
   let acct;
   if (ch.purpose === "login") {
@@ -310,7 +312,9 @@ async function resolveSession(token) {
   );
   if (!row) return null;
   const maxAge = sessionHours(row.role) * 3600e3;
-  if (row.disabled_at || row.expires_at < new Date() || Date.now() - row.session_created.getTime() > maxAge) {
+  // Admin sessions also end after a period without use (idle timeout).
+  const idle = row.role === "admin" && Date.now() - row.last_used_at.getTime() > config.auth.adminIdleMinutes * 60e3;
+  if (row.disabled_at || idle || row.expires_at < new Date() || Date.now() - row.session_created.getTime() > maxAge) {
     db.query("DELETE FROM auth_sessions WHERE id = $1", [row.session_id]).catch(() => {});
     return null;
   }

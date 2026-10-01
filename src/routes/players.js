@@ -9,17 +9,14 @@ const router = Router();
 const admin = requireRole("admin");
 const POSITIONS = ["C", "LW", "RW", "F", "D", "G"];
 
-// Email and the Factions player id (a reversible encoding of the email)
-// are PII: only admins ever see them.
+// Allow-list, so a new private column can't leak by default. Email, birth
+// date, LeagueApps id and the Factions member id (a reversible encoding of
+// the email) are only ever returned to admins.
+const PUBLIC_FIELDS = ["id", "first_name", "last_name", "position", "shoots", "preferred_number", "external_id",
+  "factions_order", "player_code", "created_at", "updated_at"];
 function serialize(p, req) {
   if (hasRole(req, "admin")) return p;
-  const rest = { ...p };
-  delete rest.email;
-  delete rest.factions_player_id;
-  delete rest.birth_date;
-  delete rest.leagueapps_user_id;
-  delete rest.name_key;
-  return rest;
+  return Object.fromEntries(PUBLIC_FIELDS.filter((k) => k in p).map((k) => [k, p[k]]));
 }
 
 function playerFields(body) {

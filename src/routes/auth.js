@@ -3,7 +3,7 @@ const config = require("../config");
 const accounts = require("../services/accounts");
 const notify = require("../services/notify");
 const { rateLimit } = require("../lib/rateLimit");
-const { requireAccount, requireRole } = require("../middleware/auth");
+const { requireAccount, requireRole, requireInteractiveAdmin } = require("../middleware/auth");
 const { badRequest } = require("../lib/http");
 
 // Public sign-up / sign-in endpoints (/api/v1/auth/*) and the signed-in
@@ -43,7 +43,10 @@ router.post("/auth/setup", starts, async (req, res) => {
 
 router.post("/auth/verify", verifies, async (req, res) => {
   if (!req.body.code) throw badRequest("Enter the 6-digit code.");
-  res.json(await accounts.verify(str(req.body.challenge_id), str(String(req.body.code)), { accountId: req.auth.accountId }));
+  const r = await accounts.verify(str(req.body.challenge_id), str(String(req.body.code)), { accountId: req.auth.accountId, sessionId: req.auth.sessionId });
+  // The audit log records who signed in (by account id, never email).
+  if (r.account) req.auth.actor = `account:${r.account.id}`;
+  res.json(r);
 });
 
 router.post("/auth/resend", starts, async (req, res) => {
@@ -87,7 +90,7 @@ router.get("/admin/accounts", admin, async (_req, res) => {
   res.json(await accounts.listAccounts());
 });
 
-router.patch("/admin/accounts/:id", admin, async (req, res) => {
+router.patch("/admin/accounts/:id", requireInteractiveAdmin, async (req, res) => {
   const tid = optInt(req.body.tournament_id, "tournament_id", { min: 1 });
   res.json(await accounts.updateAccount(intParam(req.params.id), {
     role: optEnum(req.body.role, "role", ["user", "scorekeeper", "admin"]) ?? undefined,
@@ -96,11 +99,11 @@ router.patch("/admin/accounts/:id", admin, async (req, res) => {
   }));
 });
 
-router.post("/admin/accounts/:id/logout", admin, async (req, res) => {
+router.post("/admin/accounts/:id/logout", requireInteractiveAdmin, async (req, res) => {
   res.json({ ended: await accounts.endAllSessions(intParam(req.params.id)) });
 });
 
-router.delete("/admin/accounts/:id", admin, async (req, res) => {
+router.delete("/admin/accounts/:id", requireInteractiveAdmin, async (req, res) => {
   await accounts.deleteAccount(intParam(req.params.id));
   res.status(204).end();
 });

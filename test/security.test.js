@@ -265,3 +265,67 @@ test("A09: changes and rejected requests are audited, without secrets", async ()
   const sec = (await api("GET", "/admin/security")).body;
   assert.equal(sec.admin_token_strong, true);
 });
+
+// ---------------------------------------------------------------------------
+// Audit 2026-10 (docs/SECURITY-AUDIT.md): regression tests for each fix.
+
+test("Audit F1 / API4: behind Railway, the client address comes from X-Real-IP", async () => {
+  const { failures } = require("../src/middleware/auth");
+  failures.reset();
+  config.clientIpHeader = "x-real-ip";
+  try {
+    // Every request reaches the app from the same proxy address; only
+    // X-Real-IP tells clients apart. One attacker must not lock out everyone.
+    const proxy = "10.0.0.1";
+    for (let i = 0; i < config.rateLimits.authFailuresPer15Min; i++) {
+      await call("GET", "/me", { token: `bad-${i}`, ip: proxy, headers: { "x-real-ip": "203.0.113.66" } });
+    }
+    assert.equal((await call("GET", "/me", { token: "bad-x", ip: proxy, headers: { "x-real-ip": "203.0.113.66" } })).status, 429);
+    assert.equal((await call("GET", "/me", { token: ADMIN, ip: proxy, headers: { "x-real-ip": "203.0.113.77" } })).status, 200, "other clients unaffected");
+    // A value that isn't an IP address is ignored.
+    assert.equal((await call("GET", "/me", { token: ADMIN, ip: nextIp(), headers: { "x-real-ip": "not-an-ip" } })).status, 200);
+  } finally {
+    config.clientIpHeader = "";
+    failures.reset();
+  }
+});
+
+test("Audit F2 / API5: an admin API key can't hand out access or send data off-site", async () => {
+  const key = (await api("POST", "/admin/api-keys", { name: "automation", role: "admin" })).body.key;
+  const ip = nextIp();
+  assert.equal((await call("GET", "/admin/api-keys", { token: key, ip })).status, 200, "reading is fine");
+  for (const [method, path, body] of [
+    ["POST", "/admin/api-keys", { name: "more", role: "admin" }],
+    ["POST", "/admin/webhooks", { name: "x", url: "https://example.com/hook" }],
+    ["PATCH", "/admin/webhooks/1", { url: "https://example.com/other" }],
+    ["PATCH", "/admin/accounts/1", { role: "admin" }],
+    ["DELETE", "/admin/accounts/1"],
+    ["POST", "/admin/accounts/1/logout"],
+  ]) {
+    const r = await call(method, path, { token: key, ip, body: body || {} });
+    assert.equal(r.status, 403, `${method} ${path}`);
+    assert.match(r.body.error, /signed in with email/);
+  }
+  // Day-to-day admin work with a key still works.
+  assert.equal((await call("POST", "/tournaments", { token: key, ip, body: { name: "Key-made Cup" } })).status, 201);
+});
+
+test("Audit F3 / API3: public tournament and player data is allow-listed", async () => {
+  const t = S["Scope A"];
+  await api("PUT", `/tournaments/${t.tid}/leagueapps`, { program_ids: ["12345"], registration_prefix: "SA26" });
+  for (const body of [(await call("GET", `/tournaments/${t.tid}`)).body, (await call("GET", "/tournaments")).body.find((x) => x.id === t.tid)]) {
+    for (const k of ["leagueapps_program_ids", "registration_seq", "registration_prefix", "factions_points"]) assert.equal(body[k], undefined, k);
+  }
+  assert.deepEqual((await api("GET", `/tournaments/${t.tid}`)).body.leagueapps_program_ids, ["12345"], "admins still see it");
+  const p = (await api("POST", "/players", { first_name: "Allow", last_name: "List", email: "allow.list@example.com" })).body;
+  const pub = (await call("GET", `/players/${p.id}`)).body;
+  const allowed = ["id", "first_name", "last_name", "position", "shoots", "preferred_number", "external_id", "factions_order", "player_code",
+    "created_at", "updated_at", "rosters", "factions"];
+  assert.deepEqual(Object.keys(pub).filter((k) => !allowed.includes(k)), []);
+});
+
+test("Audit F4: database integrity errors become 409, not 500", async () => {
+  const { pgToHttp } = require("../src/lib/http");
+  const e = pgToHttp(Object.assign(new Error("a Factions member's Order is permanent"), { code: "P0001" }));
+  assert.equal(e.status, 409);
+});

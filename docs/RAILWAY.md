@@ -50,6 +50,18 @@ railway variable set --service blst AUTH_LOG_CODES=false
 Without the CLI installed, write `npx @railway/cli` instead of `railway`, or
 set the variables in the service's **Variables** tab on railway.com.
 
+**Recommended:** run the app with a least-privilege database login. Railway's
+database login is a superuser.
+1. Create the restricted login:
+   ```bash
+   railway ssh --service blst npm run db:app-role
+   ```
+2. In the `blst` service's Variables tab, set the two values it prints:
+   - `DATABASE_URL`: the `blst_app` login, which can only read and write rows;
+   - `DATABASE_MIGRATION_URL`: `${{Postgres.DATABASE_URL}}`, the owner login,
+     used for migrations only.
+3. Admin → Security should now show ✓ for the database login.
+
 Optional:
 - LeagueApps variables (see the README), which also import every LeagueApps
   member into their Factions Order;

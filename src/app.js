@@ -1,4 +1,5 @@
 const path = require("path");
+const net = require("net");
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
@@ -16,12 +17,22 @@ function createApp() {
   // Heroku's router is the single trusted proxy: req.ip / req.protocol come
   // from its X-Forwarded-* headers, nothing further upstream is trusted.
   app.set("trust proxy", 1);
+  app.use((req, _res, next) => {
+    if (config.clientIpHeader) {
+      const v = (req.get(config.clientIpHeader) || "").trim();
+      if (net.isIP(v)) Object.defineProperty(req, "ip", { value: v, configurable: true });
+    }
+    next();
+  });
 
   // Plain HTTP is redirected to HTTPS once deployed (HSTS takes over after).
   if (config.deployed) {
     app.use((req, res, next) => {
       if (req.secure || req.path === "/health") return next();
-      res.redirect(308, `https://${req.headers.host}${req.originalUrl}`);
+      // Only a plain host[:port] goes into the redirect (no open redirect via Host).
+      const host = String(req.headers.host || "");
+      if (!/^[a-z0-9.-]{1,253}(:\d{1,5})?$/i.test(host)) return res.status(400).send("bad host");
+      res.redirect(308, `https://${host}${req.originalUrl}`);
     });
   }
 

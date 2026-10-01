@@ -11,7 +11,8 @@
     "test": "node --test --test-concurrency=1 \"test/*.test.js\"",
     "sync:leagueapps": "node src/db/sync-leagueapps.js",
     "railway": "bash scripts/railway-setup.sh",
-    "factions:import": "node src/db/import-factions.js"
+    "factions:import": "node src/db/import-factions.js",
+    "db:app-role": "node src/db/create-app-role.js"
   },
   "repository": {
     "type": "git",

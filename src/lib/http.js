@@ -82,6 +82,9 @@ function pgToHttp(err) {
     case "22P02":
     case "22003":
       return badRequest("invalid value");
+    case "P0001":
+      // Raised by our own data-integrity triggers (fixed, safe messages).
+      return conflict(String(err.message || "not allowed").slice(0, 200));
     default:
       return null;
   }

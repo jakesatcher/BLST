@@ -17,6 +17,16 @@ module.exports = {
   // is already encrypted and its Postgres doesn't use TLS there; set
   // DATABASE_SSL=true if you point at Railway's public proxy URL instead.
   databaseSsl: bool(process.env.DATABASE_SSL, onHeroku),
+  // Least privilege: migrations can run as an owner role while the app runs
+  // as a role that can only read and write rows (npm run db:app-role).
+  migrationDatabaseUrl: process.env.DATABASE_MIGRATION_URL || "",
+  // Statement / connection limits so a slow query can't pin the pool.
+  dbStatementTimeoutMs: Number(process.env.DB_STATEMENT_TIMEOUT_MS || 20000),
+  // Railway's edge reports the client address in X-Real-IP (it documents
+  // no X-Forwarded-For), so without this every visitor would share the
+  // proxy's address for rate limits and lockouts. Override with
+  // CLIENT_IP_HEADER; only set it behind a proxy that overwrites the header.
+  clientIpHeader: (process.env.CLIENT_IP_HEADER || (onRailway ? "x-real-ip" : "")).toLowerCase(),
   adminToken: process.env.ADMIN_TOKEN || "",
   publicExports: bool(process.env.PUBLIC_EXPORTS, true),
   // Local development only: with no ADMIN_TOKEN, writes are refused unless
@@ -37,6 +47,7 @@ module.exports = {
     // (every admin must sign in with MFA) unless this break-glass is on.
     adminTokenBreakGlass: bool(process.env.ADMIN_TOKEN_BREAK_GLASS, false),
     sessionHours: { admin: 12, scorekeeper: 24, user: 24 * 30 },
+    adminIdleMinutes: Number(process.env.ADMIN_IDLE_MINUTES || 120),
     // Comma-separated calling codes SMS may go to (blocks SMS-pumping fraud).
     smsCountryCodes: (process.env.SMS_ALLOWED_COUNTRY_CODES || "1").split(",").map((s) => s.trim().replace(/^\+/, "")).filter(Boolean),
     smsMaxPerHour: Number(process.env.SMS_MAX_PER_HOUR || 300),

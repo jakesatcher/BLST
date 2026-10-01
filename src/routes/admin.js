@@ -1,13 +1,14 @@
 const crypto = require("crypto");
 const { Router } = require("express");
 const db = require("../db");
-const { requireRole, hashKey, generateKey } = require("../middleware/auth");
+const { requireRole, requireInteractiveAdmin, hashKey, generateKey } = require("../middleware/auth");
 const { badRequest, notFound, intParam, optInt, optEnum, optString, optBool, requireFields, buildUpdate } = require("../lib/http");
 const { assertPublicUrl } = require("../lib/netguard");
 const webhooks = require("../services/webhooks");
 
 const router = Router();
 const admin = requireRole("admin");
+const person = requireInteractiveAdmin;
 
 router.get("/me", (req, res) => {
   res.json({
@@ -26,7 +27,7 @@ router.get("/admin/api-keys", admin, async (_req, res) => {
   ));
 });
 
-router.post("/admin/api-keys", admin, async (req, res) => {
+router.post("/admin/api-keys", person, async (req, res) => {
   const name = optString(req.body.name, "name", { max: 80 });
   const role = optEnum(req.body.role, "role", ["admin", "scorekeeper", "readonly"]);
   if (!name || !role) throw badRequest("name and role are required");
@@ -81,6 +82,16 @@ router.get("/admin/security", admin, async (_req, res) => {
     private_network_urls_allowed: config.allowPrivateUrls,
     rate_limits: config.rateLimits,
     last_24h: counts,
+    database: {
+      ...(await db.one(`SELECT current_user AS role, r.rolsuper AS superuser, r.rolcreaterole AS can_create_roles,
+                               has_schema_privilege(current_user, 'public', 'CREATE') AS can_change_schema,
+                               current_setting('statement_timeout') AS statement_timeout,
+                               (SELECT ssl FROM pg_stat_ssl WHERE pid = pg_backend_pid()) AS tls
+                          FROM pg_roles r WHERE r.rolname = current_user`)),
+      separate_migration_login: Boolean(config.migrationDatabaseUrl),
+    },
+    client_ip_header: config.clientIpHeader || null,
+    platform: config.platform,
     accounts: {
       ...(await db.one(`SELECT count(*) FILTER (WHERE role = 'admin' AND disabled_at IS NULL) AS admins,
                                count(*) FILTER (WHERE role = 'scorekeeper' AND disabled_at IS NULL) AS scorekeepers,
@@ -122,7 +133,7 @@ router.get("/admin/webhooks", admin, async (_req, res) => {
   res.json((await db.many("SELECT * FROM webhooks ORDER BY id")).map(hide));
 });
 
-router.post("/admin/webhooks", admin, async (req, res) => {
+router.post("/admin/webhooks", person, async (req, res) => {
   const fields = { name: optString(req.body.name, "name", { max: 80 }), url: await parseUrl(req.body.url) };
   requireFields(fields, ["name", "url"]);
   const secret = optString(req.body.secret, "secret", { max: 200 }) || crypto.randomBytes(24).toString("hex");
@@ -133,7 +144,7 @@ router.post("/admin/webhooks", admin, async (req, res) => {
   res.status(201).json(hook);
 });
 
-router.patch("/admin/webhooks/:id", admin, async (req, res) => {
+router.patch("/admin/webhooks/:id", person, async (req, res) => {
   const upd = buildUpdate({
     name: optString(req.body.name, "name", { max: 80 }),
     url: await parseUrl(req.body.url),

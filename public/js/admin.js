@@ -1348,6 +1348,15 @@
           ok(!sec.deployed || !sec.accounts.codes_in_log, sec.accounts.codes_in_log ? "Sign-in codes are printed in the server log (development)" : "Sign-in codes are never logged"),
           ok(!sec.deployed || sec.accounts.auth_secret_set, sec.accounts.auth_secret_set ? "AUTH_SECRET is set" : sec.deployed ? "AUTH_SECRET isn't set: sign-ins in progress are lost on restart" : "AUTH_SECRET isn't set (fine for local development)"),
           ok(!sec.open_dev_mode, sec.open_dev_mode ? "Open development mode is ON: anyone can make changes" : "Changes require an account or key"),
+          ok(!sec.database.superuser && !sec.database.can_change_schema,
+            !sec.database.superuser && !sec.database.can_change_schema
+              ? `The app's database login ("${sec.database.role}") can only read and write rows`
+              : `The app connects to the database as "${sec.database.role}"${sec.database.superuser ? ", a superuser" : ", which can change the schema"}. Run npm run db:app-role for a least-privilege login (see SECURITY.md)`),
+          ok(sec.database.statement_timeout !== "0", `Database queries time out after ${sec.database.statement_timeout}`),
+          ok(!sec.deployed || sec.database.tls || sec.platform === "railway",
+            sec.database.tls ? "Database connection is encrypted (TLS)"
+              : sec.platform === "railway" ? "Database traffic stays on Railway's encrypted private network"
+                : sec.deployed ? "Database connection isn't using TLS (set DATABASE_SSL=true)" : "Database connection is local (no TLS needed)"),
           ok(!sec.private_network_urls_allowed, sec.private_network_urls_allowed ? "Webhooks may target private networks (ALLOW_PRIVATE_NETWORK_URLS)" : "Webhooks and link checks can't reach internal networks"),
           ok(true, `Rate limits: ${sec.rate_limits.readsPerMinute} reads / ${sec.rate_limits.writesPerMinute} changes per minute per IP; sign-in locked after ${sec.rate_limits.authFailuresPer15Min} bad keys in 15 min`),
           ok(true, `Browser access (CORS): ${sec.cors_origins.join(", ")}`),

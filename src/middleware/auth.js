@@ -102,6 +102,20 @@ function hasRole(req, role) {
   return Boolean(req.auth && req.auth.role && RANK[req.auth.role] >= RANK[role]);
 }
 
+/**
+ * Admin actions that hand out access or send data off-site (API keys,
+ * accounts, webhooks) need a person who passed MFA, not an API key: a
+ * leaked admin key must not be able to mint more access for itself.
+ * The setup key (before setup / break-glass) and local dev mode count as people.
+ */
+function requireInteractiveAdmin(req, res, next) {
+  requireRole("admin")(req, res, (err) => {
+    if (err) return next(err);
+    if (["session", "admin-token", "dev-open"].includes(req.auth.via)) return next();
+    next(new HttpError(403, "this needs an admin signed in with email + text code, not an API key"));
+  });
+}
+
 /** Routes for the signed-in account itself (not API keys). */
 function requireAccount(req, _res, next) {
   if (req.auth && req.auth.via === "session") return next();
@@ -132,5 +146,5 @@ function generateKey() {
 }
 
 module.exports = {
-  authenticate, requireRole, requireAccount, hasRole, assertTournamentScope, hashKey, generateKey, safeEqual, failures, MIN_ADMIN_TOKEN_LENGTH,
+  authenticate, requireRole, requireAccount, requireInteractiveAdmin, hasRole, assertTournamentScope, hashKey, generateKey, safeEqual, failures, MIN_ADMIN_TOKEN_LENGTH,
 };
