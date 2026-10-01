@@ -78,7 +78,7 @@
 
   const view = h("div");
   const mainTabs = tabs([["tournaments", "Tournaments"], ["players", "Players"], ["history", "Historical import"], ["keys", "API keys"], ["webhooks", "Webhooks"], ["factions", "BLPA Factions"]],
-    (t) => { history.replaceState(null, "", `#${t}`); show(t); }, location.hash.slice(1).split("/")[0] || "tournaments");
+    (t) => { history.replaceState(null, "", `#${t}`); show(t); }, location.hash.slice(1).split("/")[0] || "tournaments", { size: "big" });
   mount(app,
     h("div", { class: "row between" }, h("h1", null, "Admin"),
       me.via === "dev-open" ? h("span", { class: "badge" }, "dev mode: no ADMIN_TOKEN set") : ""),
@@ -111,7 +111,7 @@
     const t = await get(`/tournaments/${selectedTid}`);
     const sub = h("div");
     const subTabs = tabs([["teams", "Teams & rosters"], ["schedule", "Schedule"], ["import", "Draft / roster upload"], ["moves", "Moves"], ["settings", "Settings"], ["factions", "Factions sync"]],
-      (s) => tournamentSub(s, t, sub), "teams");
+      (s) => tournamentSub(s, t, sub), "teams", { size: "medium" });
     const checklist = h("div");
     mount(body, checklist, subTabs.el, sub);
     tournamentSub("teams", t, sub);

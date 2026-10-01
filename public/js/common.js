@@ -218,19 +218,40 @@
     return wrap;
   }
 
+  // Simple line icons for the main menu (stroke = currentColor).
+  const ICONS = {
+    index: ["M3 5h18v14H3z", "M12 5v14", "M7 10v4", "M16.5 10h-1.5v4h1.5"],
+    scorekeeper: ["M12 21a8 8 0 1 0 0-16 8 8 0 0 0 0 16z", "M12 9v4l2.5 2", "M9.5 2.5h5", "M12 2.5V5"],
+    admin: ["M4 6h10", "M18 6h2", "M4 12h4", "M12 12h8", "M4 18h12", "M20 18h0", "M16 4v4", "M10 10v4", "M18 16v4"],
+    docs: ["M8 7l-5 5 5 5", "M16 7l5 5-5 5", "M13.5 5l-3 14"],
+  };
+  function icon(name) {
+    const NS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(NS, "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("class", "icon");
+    for (const d of ICONS[name] || []) {
+      const path = document.createElementNS(NS, "path");
+      path.setAttribute("d", d);
+      svg.appendChild(path);
+    }
+    return svg;
+  }
+
   function topbar(active) {
     const links = [
-      ["index", "/", "Scores"],
-      ["scorekeeper", "/scorekeeper.html", "Scorekeeper"],
-      ["admin", "/admin.html", "Admin"],
-      ["docs", "/api.html", "API"],
+      ["index", "/", "Scores", "Scores"],
+      ["scorekeeper", "/scorekeeper.html", "Scorekeeper", "Scoring"],
+      ["admin", "/admin.html", "Admin & setup", "Setup"],
+      ["docs", "/api.html", "API", "API"],
     ];
     const who = h("span", { class: "who" });
     if (getToken()) {
       get("/me")
         .then((me) => {
           if (!me.role || me.via === "dev-open") return;
-          mount(who, `Signed in: ${me.role}${me.key_name ? ` (${me.key_name})` : ""} · `,
+          mount(who, h("span", { title: me.key_name ? `Signed in with key "${me.key_name}"` : "Signed in" }, me.role), " · ",
             h("a", { href: "#", onclick: (e) => { e.preventDefault(); setToken(""); location.reload(); } }, "Sign out"));
         })
         .catch(() => {});
@@ -239,14 +260,16 @@
       "header",
       { class: "topbar" },
       h("a", { class: "brand", href: "/" }, "BLST"),
-      h("nav", null, links.map(([id, href, label]) => h("a", { href, class: id === active ? "active" : null }, label))),
-      h("span", { class: "spacer" }),
+      h("nav", { class: "mainnav", "aria-label": "Main menu" },
+        links.map(([id, href, label, short]) =>
+          h("a", { href, class: id === active ? "active" : null, "aria-current": id === active ? "page" : null, "aria-label": label },
+            icon(id), h("span", { class: "long" }, label), h("span", { class: "short", "aria-hidden": "true" }, short)))),
       who,
     );
   }
 
-  function tabs(names, onChange, initial) {
-    const bar = h("div", { class: "tabs", role: "tablist" });
+  function tabs(names, onChange, initial, { size } = {}) {
+    const bar = h("div", { class: `tabs${size ? ` ${size}` : ""}`, role: "tablist" });
     let current = initial || names[0][0];
     function render() {
       mount(
