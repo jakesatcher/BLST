@@ -72,17 +72,11 @@ module.exports = {
     adminTokenBreakGlass: bool(process.env.ADMIN_TOKEN_BREAK_GLASS, false),
     sessionHours: { admin: 12, scorekeeper: 24, user: 24 * 30 },
     adminIdleMinutes: Number(process.env.ADMIN_IDLE_MINUTES || 120),
-    // Comma-separated calling codes SMS may go to (blocks SMS-pumping fraud).
-    smsCountryCodes: (process.env.SMS_ALLOWED_COUNTRY_CODES || "1").split(",").map((s) => s.trim().replace(/^\+/, "")).filter(Boolean),
-    smsMaxPerHour: Number(process.env.SMS_MAX_PER_HOUR || 300),
-    // Without an email/SMS provider, print codes to the server log instead.
-    // On by default so the first admin can be set up before email/SMS are
-    // configured; it only ever applies to a channel with no provider.
-    // AUTH_LOG_CODES=false refuses to sign anyone in without providers.
+    // Without an email provider, print codes to the server log instead.
+    // On by default so the first admin can be set up before email is
+    // configured; it only applies while there's no email provider.
+    // AUTH_LOG_CODES=false refuses to sign anyone in without one.
     logCodes: bool(process.env.AUTH_LOG_CODES, true),
-    // Host name for the WebOTP line in texts ("@blst.example.com #123456"),
-    // which lets phones offer the code automatically. Optional.
-    appHost: (process.env.APP_HOST || process.env.RAILWAY_PUBLIC_DOMAIN || process.env.HEROKU_APP_DEFAULT_DOMAIN_NAME || "").replace(/^https?:\/\//, "").replace(/\/.*$/, ""),
   },
   email: {
     smtpUrl: process.env.SMTP_URL || "",
@@ -90,16 +84,6 @@ module.exports = {
     // ports are blocked (Railway's Free, Trial and Hobby plans).
     resendApiKey: process.env.RESEND_API_KEY || "",
     from: process.env.EMAIL_FROM || "BLST <no-reply@localhost>",
-  },
-  sms: {
-    twilioSid: process.env.TWILIO_ACCOUNT_SID || "",
-    twilioToken: process.env.TWILIO_AUTH_TOKEN || "",
-    twilioFrom: process.env.TWILIO_FROM_NUMBER || "",
-    twilioMessagingService: process.env.TWILIO_MESSAGING_SERVICE_SID || "",
-    // Twilio Verify (VA...): Twilio sends and checks the code from its own
-    // registered senders, so no A2P 10DLC / toll-free registration is needed.
-    // Takes precedence over TWILIO_FROM_NUMBER for sign-in codes.
-    twilioVerifyService: process.env.TWILIO_VERIFY_SERVICE_SID || "",
   },
   rateLimits: {
     readsPerMinute: Number(process.env.RATE_LIMIT_READS_PER_MIN || 600),

@@ -102,18 +102,16 @@ ends in `.railway.internal`.
 
 ## After deploying
 
-**Sign-in codes are written to the Deploy Logs** until email and text
-messages are set up, so you can create the first admin straight away. In the
+**Sign-in codes are written to the Deploy Logs** until email is set up, so you can create the first admin straight away. In the
 service's **Deploy Logs**, look for lines like:
 
 ```
 [dev email to you@example.com] 123456 is your BLST code
-[dev sms to +15551234567] Your BLST code is 123456. It expires in 10 min. …
 ```
 
 Each code works for 10 minutes; asking again sends a new one.
 
-### Real email and texts
+### Real email
 
 **Email: Resend** (recommended on Railway: it sends over HTTPS, and Railway
 allows outbound SMTP only on Pro plans and above).
@@ -125,21 +123,11 @@ allows outbound SMTP only on Pro plans and above).
 
 On a Pro plan any SMTP service also works: `SMTP_URL='smtps://USER:PASS@smtp.example.com:465'`.
 
-**Texts: Twilio Verify** (recommended: Twilio sends the codes from its own
-registered numbers, so no A2P 10DLC or toll-free registration).
-1. In the Twilio Console: **Verify → Services → Create new**. Name it
-   `Beer League Stats`, tick **SMS**, and copy the **Service SID** (`VA...`).
-2. Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and
-   `TWILIO_VERIFY_SERVICE_SID=VA...`.
-
-The start-up log then says `Text messages: Twilio Verify`. Trial accounts
-can only text numbers verified in Twilio; upgrade before real users sign up.
-(Sending from your own number with `TWILIO_FROM_NUMBER` also works, but US
-carriers require A2P 10DLC or toll-free registration for it.)
+**Second factor:** admins and scorekeepers use an authenticator app or a
+passkey, set up in the app the first time they sign in. Nothing to configure.
 
 ```bash
 railway variable set --service blst RESEND_API_KEY=re_... EMAIL_FROM='Beer League Stats <no-reply@beerleaguestats.hockey>'
-railway variable set --service blst TWILIO_ACCOUNT_SID=AC... TWILIO_AUTH_TOKEN=... TWILIO_VERIFY_SERVICE_SID=VA...
 ```
 
 Without the CLI, write `npx @railway/cli` instead of `railway`, or use the
@@ -151,10 +139,9 @@ and every email logs `email sent via … to j•••@…`. If you see neither,
 variables haven't reached the running deployment. A sign-in for an email with no
 account sends nothing (on purpose); the log says so with
 `[auth] sign-in for …: no account with that email`. On a new install use
-**Set up admin**, not **Sign in**. Once a channel has a provider, its codes are
-sent and never logged. If sending fails, the reason is in the Deploy Logs
-(`email send failed: …` or `sms send failed: …`). When both work, set
-`AUTH_LOG_CODES=false`.
+**Set up admin**, not **Sign in**. Once email is set up, codes are sent and never
+logged. If sending fails, the reason is in the Deploy Logs
+(`email send failed: …`). When it works, set `AUTH_LOG_CODES=false`.
 
 Optional:
 - LeagueApps variables (see the README), which also import every LeagueApps
@@ -193,7 +180,7 @@ Then:
 Leave `APP_DOMAIN` unset to run a single league on any address.
 
 Admin → **Security** shows the live security posture. It should be all ✓ once
-email and SMS are set up.
+email is set up and every admin and scorekeeper has an authenticator or passkey.
 
 ## What BLST sets up by itself
 
@@ -227,7 +214,7 @@ Your existing `ADMIN_TOKEN` and `AUTH_SECRET` keep working, so leave them.
   isn't used.
 - **Nothing is ever open by default:** with nothing configured, every change
   needs an admin, and the only way to create the first admin is the setup key
-  from the log plus email and text codes.
+  from the log plus the emailed code, then an authenticator app or passkey.
 - **Keep `blst` at one replica:** live scores are shared in memory.
 - **Sign-in is per address:** browsers keep the sign-in for each organization's
   address separately, so people sign in on each one they use.

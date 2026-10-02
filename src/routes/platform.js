@@ -153,6 +153,12 @@ router.post("/platform/accounts/:id/logout", requireInteractiveAdmin, requirePla
   res.json({ ended: await accounts.endAllSessions(intParam(req.params.id)) });
 });
 
+/** Lost authenticator/passkey: removes every second factor so they can set up a new one. */
+router.post("/platform/accounts/:id/reset-mfa", requireInteractiveAdmin, requirePlatformAdmin, async (req, res) => {
+  await require("../services/mfa").resetAll(intParam(req.params.id));
+  res.json({ ok: true });
+});
+
 router.delete("/platform/accounts/:id", requireInteractiveAdmin, requirePlatformAdmin, async (req, res) => {
   await accounts.deleteAccount(intParam(req.params.id));
   res.status(204).end();

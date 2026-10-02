@@ -31,8 +31,8 @@ function extractToken(req) {
 const failures = failureCounter({ windowMs: 15 * 60 * 1000, max: config.rateLimits.authFailuresPer15Min });
 
 /**
- * Resolves the caller's role from a signed-in account session (email + SMS
- * codes), ADMIN_TOKEN or a stored API key, and
+ * Resolves the caller's role from a signed-in account session (emailed code,
+ * plus an authenticator app or passkey for staff), ADMIN_TOKEN or a stored API key, and
  * attaches it as req.auth. Requests without credentials continue as
  * anonymous (public reads); requireRole() rejects them where needed.
  *
@@ -70,10 +70,16 @@ async function authenticate(req, res, next) {
       const m = req.org && !platformAdmin
         ? await db.one("SELECT role, tournament_id FROM org_members WHERE account_id = $1", [a.id])
         : null;
-      const role = platformAdmin ? "admin" : m ? m.role : "user";
+      let role = platformAdmin ? "admin" : m ? m.role : "user";
+      // Staff access needs a session that passed the second factor
+      // (authenticator app or passkey). Without one: an ordinary account
+      // until they set one up.
+      const mfaRequired = role !== "user" && !a.session_mfa;
+      if (mfaRequired) role = "user";
       req.auth = {
-        role, via: "session", accountId: a.id, sessionId: a.session_id, email: a.email, platformAdmin,
-        tournamentId: m && m.role === "scorekeeper" ? m.tournament_id : null, actor: `account:${a.id}`,
+        role, via: "session", accountId: a.id, sessionId: a.session_id, email: a.email, platformAdmin: platformAdmin && !mfaRequired,
+        sessionMfa: Boolean(a.session_mfa), mfaRequired,
+        tournamentId: m && m.role === "scorekeeper" && !mfaRequired ? m.tournament_id : null, actor: `account:${a.id}`,
       };
       return next();
     }
@@ -119,7 +125,7 @@ function requireInteractiveAdmin(req, res, next) {
   requireRole("admin")(req, res, (err) => {
     if (err) return next(err);
     if (["session", "admin-token", "dev-open"].includes(req.auth.via)) return next();
-    next(new HttpError(403, "this needs an admin signed in with email + text code, not an API key"));
+    next(new HttpError(403, "this needs an admin signed in with their account (email code + authenticator or passkey), not an API key"));
   });
 }
 

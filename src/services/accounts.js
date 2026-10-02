@@ -2,17 +2,21 @@ const crypto = require("crypto");
 const config = require("../config");
 const db = require("../db");
 const notify = require("./notify");
+const mfa = require("./mfa");
 const { HttpError, badRequest } = require("../lib/http");
 const { withOrg } = require("../lib/context");
 
-// Accounts: passwordless sign-in with two factors for everyone.
-//   1. a one-time code emailed to the address (proves the email), then
-//   2. a one-time code texted to the phone on file (proves the phone).
-// The only personal data kept is the email address and phone number.
+// Accounts: passwordless sign-in.
+//   1. a one-time code emailed to the address (everyone), then
+//   2. for accounts with a second factor: a code from an authenticator app,
+//      a passkey, or a backup code (see services/mfa.js).
+// Admins and scorekeepers must have a second factor: a session that didn't
+// pass one gets no staff access (middleware/auth.js). The only personal data
+// kept is the email address.
 //
-// Every flow is a "challenge" row that moves email -> sms -> done. Codes are
-// stored as HMACs, expire after 10 minutes and allow 5 guesses. Responses
-// never reveal whether an email has an account (see startLogin/startSignup).
+// Every flow is a "challenge" row that moves email -> (mfa) -> done. Codes
+// are stored as HMACs, expire after 10 minutes and allow 5 guesses.
+// Responses never reveal whether an email has an account.
 
 const CODE_TTL_MIN = 10;
 const MAX_ATTEMPTS = 5;
@@ -33,35 +37,14 @@ function normEmail(v) {
   return s;
 }
 
-/** "(555) 123-4567" -> "+15551234567". Only allowed country codes pass. */
-function normPhone(v) {
-  const raw = String(v || "").trim();
-  let digits = raw.replace(/[^\d]/g, "");
-  const codes = config.auth.smsCountryCodes;
-  if (!raw.startsWith("+")) {
-    if (codes.includes("1") && digits.length === 10) digits = `1${digits}`;
-    else if (!(codes.includes("1") && digits.length === 11 && digits.startsWith("1"))) {
-      throw badRequest("Enter a mobile number with its country code, for example +1 555 123 4567.");
-    }
-  }
-  const e164 = `+${digits}`;
-  if (!/^\+[1-9]\d{7,14}$/.test(e164)) throw badRequest("Enter a valid mobile number.");
-  if (!codes.some((c) => digits.startsWith(c))) throw badRequest("Text messages can't be sent to that country.");
-  if (digits.startsWith("1") && digits.length !== 11) throw badRequest("Enter a valid mobile number.");
-  return e164;
-}
-
 function maskEmail(e) {
   const [user, domain] = String(e).split("@");
   return `${user.slice(0, 1)}${"•".repeat(Math.max(2, Math.min(6, user.length - 1)))}@${domain}`;
 }
-function maskPhone(p) {
-  return p ? `•••• ${String(p).slice(-4)}` : null;
-}
 
 // ---------------------------------------------------------------------------
-// Sending, with per-address and global caps (stops SMS-pumping fraud and
-// mailbombing someone through the sign-up form).
+// Sending, with per-address caps (stops mailbombing someone through the
+// sign-up form).
 
 async function checkSendBudget(channel, target) {
   const th = hmac(`${channel}:${target}`);
@@ -71,10 +54,6 @@ async function checkSendBudget(channel, target) {
     [channel, th],
   );
   if (r.mine >= SENDS_PER_TARGET_PER_HOUR) throw new HttpError(429, "Too many codes sent to that address. Wait an hour and try again.");
-  if (channel === "sms" && r.total >= config.auth.smsMaxPerHour) {
-    console.warn("[security] global SMS hourly cap reached");
-    throw new HttpError(429, "Text messages are busy right now. Try again shortly.");
-  }
   return th;
 }
 
@@ -84,59 +63,36 @@ async function checkSendBudget(channel, target) {
  * the responses nor the rate limits reveal whether an account exists.
  * Emails are sent in the background for the same reason (equal timing).
  */
-async function deliver(channel, target, code, purpose, ghost) {
-  notify.assertCanSend(channel);
-  const th = await checkSendBudget(channel, target);
-  await db.query("INSERT INTO auth_send_log (channel, target_hash) VALUES ($1, $2)", [channel, th]);
+async function deliver(target, code, purpose, ghost) {
+  notify.assertCanSend("email");
+  const th = await checkSendBudget("email", target);
+  await db.query("INSERT INTO auth_send_log (channel, target_hash) VALUES ('email', $1)", [th]);
   if (ghost) return;
-  if (channel === "email") {
-    const what = { signup: "finish creating your account", login: "sign in", setup_admin: "set up the admin account", change_phone: "change your phone number" }[purpose];
-    notify.sendEmail(target, `${code} is your BLST code`,
-      `Your BLST code is ${code}\n\nEnter it to ${what}. It expires in ${CODE_TTL_MIN} minutes.\n\n` +
-      "If you didn't ask for this, ignore this email; nothing changes without the code.").catch(() => {});
-  } else if (code === null) {
-    await notify.startSmsVerification(target);
-  } else {
-    // The last line lets phones offer the code automatically (WebOTP).
-    const host = config.auth.appHost;
-    await notify.sendSms(target, `Your BLST code is ${code}. It expires in ${CODE_TTL_MIN} min. Don't share it.${host ? `\n\n@${host} #${code}` : ""}`);
-  }
+  const what = { signup: "finish creating your account", login: "sign in", setup_admin: "set up the admin account" }[purpose];
+  notify.sendEmail(target, `${code} is your Beer League Stats code`,
+    `Your Beer League Stats code is ${code}\n\nEnter it to ${what}. It expires in ${CODE_TTL_MIN} minutes.\n\n` +
+    "If you didn't ask for this, ignore this email; nothing changes without the code.").catch(() => {});
 }
 
 const newCode = () => String(crypto.randomInt(0, 1e6)).padStart(6, "0");
 const codeHash = (challengeId, step, code) => hmac(`${challengeId}:${step}:${code}`);
 
-function stepTarget(ch) {
-  return ch.step === "email" ? ch.email : ch.phone;
-}
-
-/** Sends the code for the challenge's current step (unless it's a ghost). */
-// Marks an SMS step whose code Twilio Verify generated and will check.
-const VERIFY_MARK = "twilio-verify";
-const usesVerify = (ch) => ch.step === "sms" && !ch.ghost && notify.smsVerifyConfigured();
-
+/** Emails a new code for the challenge (unless it's a ghost). */
 async function sendStep(ch) {
-  if (usesVerify(ch)) {
-    await db.query(
-      "UPDATE auth_challenges SET code_hash = $2, attempts = 0, sends = sends + 1, last_sent_at = now() WHERE id = $1",
-      [ch.id, VERIFY_MARK],
-    );
-    return deliver("sms", ch.phone, null, ch.purpose, false);
-  }
   const code = newCode();
   await db.query(
     "UPDATE auth_challenges SET code_hash = $2, attempts = 0, sends = sends + 1, last_sent_at = now() WHERE id = $1",
     [ch.id, codeHash(ch.id, ch.step, code)],
   );
-  await deliver(ch.step, stepTarget(ch), code, ch.purpose, ch.ghost);
+  await deliver(ch.email, code, ch.purpose, ch.ghost);
 }
 
-async function createChallenge({ purpose, email, phone = null, accountId = null, ghost = false }) {
+async function createChallenge({ purpose, email, accountId = null, ghost = false }) {
   const id = crypto.randomBytes(24).toString("base64url");
   const ch = await db.one(
-    `INSERT INTO auth_challenges (id, purpose, email, phone, account_id, ghost, step, expires_at)
-     VALUES ($1, $2, $3, $4, $5, $6, 'email', now() + make_interval(mins => $7)) RETURNING *`,
-    [id, purpose, email, phone, accountId, ghost, CODE_TTL_MIN],
+    `INSERT INTO auth_challenges (id, purpose, email, account_id, ghost, step, expires_at)
+     VALUES ($1, $2, $3, $4, $5, 'email', now() + make_interval(mins => $6)) RETURNING *`,
+    [id, purpose, email, accountId, ghost, CODE_TTL_MIN],
   );
   await sendStep(ch);
   return { challenge_id: id, step: "email", sent_to: maskEmail(email), expires_in: CODE_TTL_MIN * 60 };
@@ -148,28 +104,26 @@ async function createChallenge({ purpose, email, phone = null, accountId = null,
 /** Sign in: email only. Unknown or disabled emails get an identical "ghost" flow. */
 async function startLogin(rawEmail) {
   const email = normEmail(rawEmail);
-  const acct = await db.one("SELECT id, phone FROM accounts WHERE email = $1 AND disabled_at IS NULL", [email]);
+  const acct = await db.one("SELECT id FROM accounts WHERE email = $1 AND disabled_at IS NULL", [email]);
   if (!acct) {
     // Nothing is sent (the response looks the same, so it doesn't reveal who
     // has an account). Operators can see why in the log.
     console.log(`[auth] sign-in for ${maskEmail(email)}: no account with that email, so no code was sent. Use "Create account" (or "Set up admin" on a new install).`);
     return createChallenge({ purpose: "login", email, ghost: true });
   }
-  return createChallenge({ purpose: "login", email, phone: acct.phone, accountId: acct.id });
+  return createChallenge({ purpose: "login", email, accountId: acct.id });
 }
 
 /**
- * Sign up: email + mobile number. If the email already has an account this
- * quietly becomes a sign-in (codes go to the email and the phone on file),
- * so the response can't be used to discover who has an account.
+ * Sign up: email only. If the email already has an account this quietly
+ * becomes a sign-in, so the response can't be used to discover who has one.
  */
-async function startSignup(rawEmail, rawPhone) {
+async function startSignup(rawEmail) {
   const email = normEmail(rawEmail);
-  const phone = normPhone(rawPhone);
-  const acct = await db.one("SELECT id, phone, disabled_at FROM accounts WHERE email = $1", [email]);
+  const acct = await db.one("SELECT id, disabled_at FROM accounts WHERE email = $1", [email]);
   if (acct && acct.disabled_at) return createChallenge({ purpose: "login", email, ghost: true });
-  if (acct) return createChallenge({ purpose: "login", email, phone: acct.phone, accountId: acct.id });
-  return createChallenge({ purpose: "signup", email, phone });
+  if (acct) return createChallenge({ purpose: "login", email, accountId: acct.id });
+  return createChallenge({ purpose: "signup", email });
 }
 
 async function adminCount() {
@@ -185,9 +139,10 @@ async function setupStatus() {
 /**
  * First global admin. Allowed only while no admin account exists, and only
  * with the setup key (the ADMIN_TOKEN config var, or without it the key
- * generated at boot and printed to the log), then email + SMS codes.
+ * generated at boot and printed to the log), then the emailed code; the
+ * new admin then sets up an authenticator app or passkey.
  */
-async function startSetup(setupKey, rawEmail, rawPhone) {
+async function startSetup(setupKey, rawEmail) {
   const { safeEqual } = require("../middleware/auth");
   const status = await setupStatus();
   if (!status.needed) throw new HttpError(409, "An admin account already exists. Sign in, or ask an admin to make you one.");
@@ -197,13 +152,7 @@ async function startSetup(setupKey, rawEmail, rawPhone) {
       : await require("./bootstrap").checkSetupKey(setupKey);
     if (!ok) throw new HttpError(403, "That setup key isn't right. It's the ADMIN_TOKEN config var, or the setup key printed in the server log.");
   }
-  return createChallenge({ purpose: "setup_admin", email: normEmail(rawEmail), phone: normPhone(rawPhone) });
-}
-
-/** Signed-in user changing their number: prove the email again, then the new phone. */
-async function startPhoneChange(accountId, rawPhone) {
-  const acct = await db.one("SELECT id, email FROM accounts WHERE id = $1", [accountId]);
-  return createChallenge({ purpose: "change_phone", email: acct.email, phone: normPhone(rawPhone), accountId: acct.id });
+  return createChallenge({ purpose: "setup_admin", email: normEmail(rawEmail) });
 }
 
 // ---------------------------------------------------------------------------
@@ -218,61 +167,71 @@ async function loadChallenge(id) {
 }
 
 /**
- * Checks a code. After the email step the SMS code is sent; after the SMS
- * step the flow completes and (except for a phone change) a session starts.
+ * Checks the current step. Email step: the emailed code; then accounts with
+ * a second factor move to the "mfa" step (authenticator code, backup code
+ * or passkey). The last step consumes the challenge and starts a session.
  */
-async function verify(challengeId, rawCode, { accountId, sessionId } = {}) {
+async function verify(challengeId, rawCode, { passkey, req } = {}) {
   const ch = await loadChallenge(challengeId);
-  if (ch.purpose === "change_phone" && ch.account_id !== accountId) throw new HttpError(403, "Sign in as the account that asked for this change.");
-  const code = String(rawCode || "").replace(/\s/g, "");
+  const code = String(rawCode || "").trim();
   // Count the guess first so parallel requests can't exceed the limit.
   const counted = await db.one(
     "UPDATE auth_challenges SET attempts = attempts + 1 WHERE id = $1 AND attempts < $2 RETURNING attempts",
     [ch.id, MAX_ATTEMPTS],
   );
   if (!counted) throw new HttpError(410, "Too many wrong codes. Start again.");
-  const ok = ch.code_hash === VERIFY_MARK
-    ? ch.step === "sms" && /^\d{4,10}$/.test(code) && (await notify.checkSmsVerification(ch.phone, code))
-    : !ch.ghost && /^\d{6}$/.test(code) && ch.code_hash &&
-      crypto.timingSafeEqual(Buffer.from(codeHash(ch.id, ch.step, code)), Buffer.from(ch.code_hash));
+  let ok;
+  if (ch.step === "email") {
+    const digits = code.replace(/\s/g, "");
+    ok = !ch.ghost && /^\d{6}$/.test(digits) && ch.code_hash &&
+      crypto.timingSafeEqual(Buffer.from(codeHash(ch.id, ch.step, digits)), Buffer.from(ch.code_hash));
+  } else if (passkey) {
+    ok = await mfa.verifyPasskey(req, ch.account_id, passkey, ch.webauthn_challenge);
+  } else if (/^\d{6}$/.test(code.replace(/\s/g, ""))) {
+    ok = await mfa.verifyTotp(ch.account_id, code.replace(/\s/g, ""));
+  } else {
+    ok = await mfa.useBackupCode(ch.account_id, code);
+  }
   if (!ok) {
     const left = MAX_ATTEMPTS - counted.attempts;
-    throw new HttpError(400, left > 0 ? `That code isn't right. ${left} ${left === 1 ? "try" : "tries"} left.` : "Too many wrong codes. Start again.");
+    const what = ch.step === "email" ? "code" : passkey ? "passkey" : "code";
+    throw new HttpError(400, left > 0 ? `That ${what} isn't right. ${left} ${left === 1 ? "try" : "tries"} left.` : "Too many wrong codes. Start again.");
   }
 
-  if (ch.step === "email") {
-    // Move to the SMS step with a fresh window; the code is single-use.
+  if (ch.step === "email" && ch.account_id && (await mfa.hasSecondFactor(ch.account_id))) {
     const next = await db.one(
-      `UPDATE auth_challenges SET step = 'sms', code_hash = NULL, attempts = 0, sends = 0,
+      `UPDATE auth_challenges SET step = 'mfa', code_hash = NULL, attempts = 0,
               expires_at = now() + make_interval(mins => $2) WHERE id = $1 AND step = 'email' RETURNING *`,
       [ch.id, CODE_TTL_MIN],
     );
     if (!next) throw new HttpError(409, "This code was already used.");
-    await sendStep(next);
-    return { step: "sms", challenge_id: ch.id, sent_to: maskPhone(next.phone), expires_in: CODE_TTL_MIN * 60 };
+    return { step: "mfa", challenge_id: ch.id, methods: await mfa.methods(ch.account_id), expires_in: CODE_TTL_MIN * 60 };
   }
 
-  // SMS step passed: consume the challenge so it can't be replayed.
+  // Last step passed: consume the challenge so it can't be replayed.
   const used = await db.query("DELETE FROM auth_challenges WHERE id = $1", [ch.id]);
   if (!used.rowCount) throw new HttpError(409, "This code was already used.");
-  return complete(ch, { sessionId });
+  return complete(ch, { mfaPassed: ch.step === "mfa" });
 }
 
-async function complete(ch, { sessionId } = {}) {
-  if (ch.purpose === "change_phone") {
-    await db.query("UPDATE accounts SET phone = $2 WHERE id = $1", [ch.account_id, ch.phone]);
-    // A new second factor ends every other session (OWASP session management).
-    const ended = (await db.query("DELETE FROM auth_sessions WHERE account_id = $1 AND id IS DISTINCT FROM $2", [ch.account_id, sessionId ?? null])).rowCount;
-    return { step: "done", phone_changed: true, other_sessions_ended: ended, account: await accountView(ch.account_id) };
-  }
+/** Passkey options for a sign-in waiting on its second factor. */
+async function passkeyOptions(req, challengeId) {
+  const ch = await loadChallenge(challengeId);
+  if (ch.step !== "mfa") throw badRequest("Enter the emailed code first.");
+  const options = await mfa.passkeyAuthenticationOptions(req, ch.account_id);
+  await db.query("UPDATE auth_challenges SET webauthn_challenge = $2 WHERE id = $1", [ch.id, options.challenge]);
+  return options;
+}
+
+async function complete(ch, { mfaPassed = false } = {}) {
   let acct;
   if (ch.purpose === "login") {
     acct = await db.one("SELECT * FROM accounts WHERE id = $1 AND disabled_at IS NULL", [ch.account_id]);
     if (!acct) throw new HttpError(403, "This account is disabled.");
   } else if (ch.purpose === "signup") {
     acct = await db.one(
-      "INSERT INTO accounts (email, phone) VALUES ($1, $2) ON CONFLICT (email) DO NOTHING RETURNING *",
-      [ch.email, ch.phone],
+      "INSERT INTO accounts (email) VALUES ($1) ON CONFLICT (email) DO NOTHING RETURNING *",
+      [ch.email],
     );
     if (!acct) throw new HttpError(409, "An account with this email already exists. Sign in instead.");
   } else if (ch.purpose === "setup_admin") {
@@ -282,10 +241,10 @@ async function complete(ch, { sessionId } = {}) {
       const n = (await c.query("SELECT count(*) AS n FROM accounts WHERE role = 'admin' AND disabled_at IS NULL")).rows[0].n;
       if (n > 0) throw new HttpError(409, "An admin account already exists. Sign in instead.");
       return (await c.query(
-        `INSERT INTO accounts (email, phone, role) VALUES ($1, $2, 'admin')
-         ON CONFLICT (email) DO UPDATE SET role = 'admin', phone = EXCLUDED.phone, disabled_at = NULL
+        `INSERT INTO accounts (email, role) VALUES ($1, 'admin')
+         ON CONFLICT (email) DO UPDATE SET role = 'admin', disabled_at = NULL
          RETURNING *`,
-        [ch.email, ch.phone],
+        [ch.email],
       )).rows[0];
     });
     invalidateAdminCache();
@@ -298,8 +257,11 @@ async function complete(ch, { sessionId } = {}) {
   }
   await claimInvites(acct);
   await db.query("UPDATE accounts SET last_login_at = now() WHERE id = $1", [acct.id]);
-  const token = await createSession(acct);
-  return { step: "done", token, account: await accountView(acct.id) };
+  const token = await createSession(acct, { mfa: mfaPassed });
+  const account = await accountView(acct.id);
+  // Staff without a second factor yet: signed in, but no staff access until
+  // they set up an authenticator app or passkey.
+  return { step: "done", token, account, mfa_setup_required: account.staff && !account.mfa.enabled };
 }
 
 /** Re-sends the current step's code (new code; the old one stops working). */
@@ -308,8 +270,9 @@ async function resend(challengeId) {
   const wait = ch.last_sent_at ? RESEND_COOLDOWN_S - Math.floor((Date.now() - ch.last_sent_at.getTime()) / 1000) : 0;
   if (wait > 0) throw new HttpError(429, `Wait ${wait}s before asking for another code.`);
   if (ch.sends >= MAX_SENDS) throw new HttpError(429, "Too many codes for this sign-in. Start again.");
+  if (ch.step !== "email") throw badRequest("Use your authenticator app, a passkey or a backup code.");
   await sendStep(ch);
-  return { step: ch.step, challenge_id: ch.id, sent_to: ch.step === "email" ? maskEmail(ch.email) : maskPhone(ch.phone) };
+  return { step: ch.step, challenge_id: ch.id, sent_to: maskEmail(ch.email) };
 }
 
 // ---------------------------------------------------------------------------
@@ -331,13 +294,18 @@ async function strongestRole(acct) {
   return r && r.r === 2 ? "admin" : r && r.r === 1 ? "scorekeeper" : "user";
 }
 
-async function createSession(acct) {
+async function createSession(acct, { mfa: passed = false } = {}) {
   const token = `${SESSION_PREFIX}${crypto.randomBytes(32).toString("base64url")}`;
   await db.query(
-    "INSERT INTO auth_sessions (account_id, token_hash, expires_at) VALUES ($1, $2, now() + make_interval(hours => $3))",
-    [acct.id, sha256(token), sessionHours(await strongestRole(acct))],
+    "INSERT INTO auth_sessions (account_id, token_hash, expires_at, mfa) VALUES ($1, $2, now() + make_interval(hours => $3), $4)",
+    [acct.id, sha256(token), sessionHours(await strongestRole(acct)), passed],
   );
   return token;
+}
+
+/** After setting up a first second factor, the current session counts as verified. */
+async function markSessionMfa(sessionId) {
+  await db.query("UPDATE auth_sessions SET mfa = TRUE WHERE id = $1", [sessionId]);
 }
 
 const isSessionToken = (t) => typeof t === "string" && t.startsWith(SESSION_PREFIX);
@@ -349,7 +317,7 @@ const isSessionToken = (t) => typeof t === "string" && t.startsWith(SESSION_PREF
  */
 async function resolveSession(token) {
   const row = await db.one(
-    `SELECT s.id AS session_id, s.created_at AS session_created, s.expires_at, s.last_used_at, a.*
+    `SELECT s.id AS session_id, s.created_at AS session_created, s.expires_at, s.last_used_at, s.mfa AS session_mfa, a.*
        FROM auth_sessions s JOIN accounts a ON a.id = s.account_id
       WHERE s.token_hash = $1`,
     [sha256(token)],
@@ -395,10 +363,12 @@ async function adminAccountsExist() {
 
 function view(a) {
   return {
-    id: a.id, email: a.email, phone: maskPhone(a.phone), platform_admin: a.role === "admin",
+    id: a.id, email: a.email, platform_admin: a.role === "admin",
     created_at: a.created_at, last_login_at: a.last_login_at, disabled: Boolean(a.disabled_at),
+    ...(a.has_mfa === undefined ? {} : { second_factor: Boolean(a.has_mfa) }),
   };
 }
+const HAS_MFA = "(a.totp_secret_enc IS NOT NULL OR EXISTS (SELECT 1 FROM account_passkeys k WHERE k.account_id = a.id)) AS has_mfa";
 
 /** The account plus the organizations it belongs to (or has asked for). */
 async function accountView(id) {
@@ -407,7 +377,11 @@ async function accountView(id) {
   const orgs = await withOrg("*", () => db.many(
     `SELECT o.id, o.slug, o.name, o.status, o.factions_enabled, m.role
        FROM org_members m JOIN organizations o ON o.id = m.org_id WHERE m.account_id = $1 ORDER BY o.name`, [id]));
-  return { ...view(a), orgs };
+  const m = await mfa.status(id);
+  return {
+    ...view(a), orgs, staff: (await strongestRole(a)) !== "user",
+    mfa: { enabled: m.totp || m.passkeys.length > 0, totp: m.totp, passkeys: m.passkeys, backup_codes_left: m.backup_codes_left },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -415,7 +389,7 @@ async function accountView(id) {
 
 async function listAccounts() {
   const rows = await withOrg("*", () => db.many(
-    `SELECT a.*,
+    `SELECT a.*, ${HAS_MFA},
             (SELECT count(*) FROM auth_sessions s WHERE s.account_id = a.id AND s.expires_at > now()) AS sessions,
             (SELECT coalesce(json_agg(json_build_object('slug', o.slug, 'name', o.name, 'role', m.role) ORDER BY o.name), '[]')
                FROM org_members m JOIN organizations o ON o.id = m.org_id WHERE m.account_id = a.id) AS orgs
@@ -480,7 +454,7 @@ async function deleteAccount(id) {
 async function listMembers() {
   const members = await db.many(
     `SELECT m.account_id, m.role, m.tournament_id, m.created_at, t.name AS tournament,
-            a.email, a.phone, a.last_login_at, a.disabled_at, a.role = 'admin' AS platform_admin
+            a.email, a.last_login_at, a.disabled_at, a.role = 'admin' AS platform_admin, ${HAS_MFA}
        FROM org_members m JOIN accounts a ON a.id = m.account_id LEFT JOIN tournaments t ON t.id = m.tournament_id
       ORDER BY m.role, a.email`,
   );
@@ -489,7 +463,7 @@ async function listMembers() {
        FROM org_invites i LEFT JOIN tournaments t ON t.id = i.tournament_id ORDER BY i.created_at DESC`,
   );
   return {
-    members: members.map(({ phone, disabled_at: d, ...m }) => ({ ...m, phone: maskPhone(phone), disabled: Boolean(d) })),
+    members: members.map(({ disabled_at: d, has_mfa: k, ...m }) => ({ ...m, second_factor: Boolean(k), disabled: Boolean(d) })),
     invites,
   };
 }
@@ -533,7 +507,7 @@ async function addMember({ email: rawEmail, role, tournament_id: tournamentId },
     if (orgName && orgUrl) {
       notify.sendEmail(email, `You're invited to ${orgName} on Beer League Stats`,
         `You've been given ${role} access to ${orgName}.\n\nCreate your account with this email address at ${orgUrl}/account#signup ` +
-        "(you'll confirm it with a code sent to this email and one texted to your phone).").catch(() => {});
+        "(you'll confirm it with a code sent to this email, then set up an authenticator app or passkey).").catch(() => {});
     }
     return { invited: true };
   });
@@ -584,8 +558,8 @@ async function prune() {
 }
 
 module.exports = {
-  normEmail, normPhone, maskEmail, maskPhone,
-  startLogin, startSignup, startSetup, startPhoneChange, setupStatus, verify, resend,
+  normEmail, maskEmail, markSessionMfa, passkeyOptions,
+  startLogin, startSignup, startSetup, setupStatus, verify, resend,
   isSessionToken, resolveSession, endSession, endAllSessions, adminAccountsExist, invalidateAdminCache,
   accountView, listAccounts, updateAccount, deleteAccount, prune, SESSION_PREFIX, strongestRole,
   listMembers, addMember, updateMember, removeMember, removeInvite, claimInvites,

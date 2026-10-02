@@ -8,6 +8,11 @@
   const STATUS = { pending: "Waiting", active: "Live", suspended: "Suspended", rejected: "Not approved" };
 
   const me = await get("/me").catch(() => ({}));
+  if (me.mfa_required) {
+    const box = h("div");
+    mount(app, h("div", { class: "card auth-card" }, h("h1", null, "Platform admin"), box));
+    return BLST.mfaSetup(box, { required: true, onDone: () => location.reload() });
+  }
   if (!me.platform_admin) {
     return mount(app, h("div", { class: "card auth-card" }, h("h1", null, "Platform admin"),
       h("p", null, "Sign in with a platform admin account to approve organizations."),
@@ -75,7 +80,7 @@
     const list = await get("/platform/accounts");
     mount(body, h("ul", { class: "card-list" }, list.map((a) => h("li", { class: "card" },
       h("div", { class: "row", style: { justifyContent: "space-between" } },
-        h("div", null, h("b", null, a.email), h("div", { class: "small muted" }, a.phone, " · ", a.sessions, " active sessions")),
+        h("div", null, h("b", null, a.email), h("div", { class: "small muted" }, a.second_factor ? "Authenticator/passkey on" : "No second factor", " · ", a.sessions, " active sessions")),
         h("div", { class: "row" },
           a.platform_admin ? h("span", { class: "badge good" }, "Platform admin") : "",
           a.disabled ? h("span", { class: "badge bad" }, "Disabled") : "")),
@@ -84,6 +89,11 @@
         h("button", { onclick: () => act(() => api("PATCH", `/platform/accounts/${a.id}`, { platform_admin: !a.platform_admin }), renderAccounts) },
           a.platform_admin ? "Remove platform admin" : "Make platform admin"),
         h("button", { onclick: () => act(() => api("PATCH", `/platform/accounts/${a.id}`, { disabled: !a.disabled }), renderAccounts) }, a.disabled ? "Enable" : "Disable"),
+        a.second_factor ? h("button", { onclick: () => act(async () => {
+          if (!(await confirmSheet(`Reset ${a.email}'s authenticator, passkeys and backup codes? Use this when they've lost their phone: they sign in with the emailed code and set up a new one.`, { title: "Reset second factor", confirmLabel: "Reset", danger: true }))) return;
+          await api("POST", `/platform/accounts/${a.id}/reset-mfa`);
+          toast("Second factor reset");
+        }, renderAccounts) }, "Reset second factor") : "",
         h("button", { onclick: () => act(async () => { const r = await api("POST", `/platform/accounts/${a.id}/logout`); toast(`Ended ${r.ended} sessions`); }, () => {}) }, "Sign out everywhere"),
         h("button", { class: "danger", onclick: () => act(async () => {
           if (!(await confirmSheet(`Delete ${a.email}? This can't be undone.`, { title: "Delete account", confirmLabel: "Delete", danger: true }))) return;

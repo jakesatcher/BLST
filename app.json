@@ -1,5 +1,5 @@
 {
-  "name": "BLST \u2014 BLPA Live Scoring",
+  "name": "BLST — BLPA Live Scoring",
   "description": "Live scoring, stats and BLPA Factions for BLPA hockey tournaments, with an iPad-friendly scorekeeper and public live scoreboards.",
   "repository": "https://github.com/jakesatcher/BLST",
   "keywords": [
@@ -27,7 +27,7 @@
   ],
   "env": {
     "ADMIN_TOKEN": {
-      "description": "Setup key for creating the first global admin account (Account \u2192 Set up admin). It stops working once an admin account exists. Auto-generated: Settings \u2192 Reveal Config Vars.",
+      "description": "Setup key for creating the first global admin account (Account → Set up admin). It stops working once an admin account exists. Auto-generated: Settings → Reveal Config Vars.",
       "generator": "secret"
     },
     "AUTH_SECRET": {
@@ -44,28 +44,13 @@
       "value": "",
       "required": false
     },
-    "TWILIO_ACCOUNT_SID": {
-      "description": "Twilio account SID for text-message codes.",
-      "value": "",
-      "required": false
-    },
-    "TWILIO_AUTH_TOKEN": {
-      "description": "Twilio auth token.",
-      "value": "",
-      "required": false
-    },
-    "TWILIO_FROM_NUMBER": {
-      "description": "Twilio phone number that sends the codes, e.g. +15551234567 (or set TWILIO_MESSAGING_SERVICE_SID).",
-      "value": "",
-      "required": false
-    },
     "AUTH_LOG_CODES": {
-      "description": "\"true\" prints sign-in codes in the Heroku log instead of sending them, for testing before email/SMS are set up. Turn off once SMTP_URL and Twilio are set.",
+      "description": "\"true\" prints sign-in codes in the Heroku log until email is set up (RESEND_API_KEY or SMTP_URL). Turn off once email works.",
       "value": "true",
       "required": false
     },
     "SEED_DEMO": {
-      "description": "\"true\" loads a demo tournament (4 teams, 2 finished games, 1 live game) on first deploy so you can try things out. Delete it from Admin \u2192 Settings when you're done.",
+      "description": "\"true\" loads a demo tournament (4 teams, 2 finished games, 1 live game) on first deploy so you can try things out. Delete it from Admin → Settings when you're done.",
       "value": "true",
       "required": false
     },
@@ -102,6 +87,11 @@
     "LEAGUEAPPS_SYNC_INTERVAL_MIN": {
       "description": "Optional: sync LeagueApps registrations every N minutes (0 = only when you press Sync now).",
       "value": "0",
+      "required": false
+    },
+    "RESEND_API_KEY": {
+      "description": "Resend API key for sign-in emails (or set SMTP_URL).",
+      "value": "",
       "required": false
     }
   },

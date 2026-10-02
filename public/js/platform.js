@@ -21,8 +21,8 @@
     // A new install has no accounts yet: "Sign in" can't work, so start at setup.
     const initial = status.setup_needed ? "setup" : location.hash === "#signup" ? "signup" : "login";
     const intros = {
-      login: "We'll email you a code, then text a code to your phone. No password needed.",
-      signup: "Create an account, then ask for your organization. All we keep is your email address and mobile number.",
+      login: "We'll email you a code. Admins and scorekeepers then use their authenticator app or passkey. No password needed.",
+      signup: "Create an account, then ask for your organization. All we keep is your email address.",
       setup: "No admin account exists yet. Enter the setup key from the server log (or ADMIN_TOKEN) to create the platform admin.",
     };
     const bar = tabs(names, (id) => signInFlow(box, { mode: id, intro: intros[id], onDone: renderSignedIn }), initial, { size: "medium" });
@@ -42,6 +42,9 @@
           : h("span", { class: `badge${o.status === "pending" ? "" : " bad"}` }, STATUS[o.status]))))
       : h("p", { class: "muted" }, "You aren't part of an organization yet. Ask for one below, or ask your league's admin to invite this email address.");
     mount(app, intro,
+      acct.staff && !acct.mfa.enabled ? h("section", { class: "card" },
+        h("p", { class: "notice" }, "Your account can run an organization. Set up an authenticator app or passkey to use that access."),
+        h("a", { class: "btn primary", href: "/account#security" }, "Set it up")) : "",
       h("section", { class: "card" }, h("h2", null, "Your organizations"), list,
         h("p", { class: "small muted" }, "Signed in as ", acct.email, ". Each organization's address has its own sign-in."),
         h("div", { class: "row" },

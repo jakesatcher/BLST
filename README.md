@@ -24,7 +24,7 @@ It's one app for many leagues. Each **organization** gets its own address, and *
 | `/tournament?id=N` | Public | Scores, standings, leaders, skater and goalie stats, rosters, Factions standings when the tournament counts for Factions |
 | `/game?id=N` | Public | Live scoreboard (clock, score, shots on goal, power play, penalty-box countdowns), scoring summary, box score, lineups, play-by-play |
 | `/player?id=N` | Public | Career stats: imported history plus every BLST tournament |
-| `/account` | Anyone | Create an account or sign in (emailed code + texted code), change mobile number, sign out everywhere, delete account. First visit: set up the platform admin |
+| `/account` | Anyone | Create an account or sign in (emailed code; staff also use an authenticator app or passkey), manage the authenticator, passkeys and backup codes, sign out everywhere, delete account. First visit: set up the platform admin |
 | `/scorekeeper` | Scorekeeper account or key | Clock and periods (Space starts/stops the clock), tap-a-number event entry, goalie pulls, lineup changes, edit/void/restore events |
 | `/admin` | Organization admin | **Organization** (Factions on/off, design your factions, people and invitations), Factions (members, points, achievements, events, bulk upload), tournaments and team count, teams, rosters and jersey numbers, moving players between teams, schedule and round-robin generator, roster and historical imports, API keys, webhooks |
 | `/api` | Anyone | API reference |
@@ -67,7 +67,7 @@ npm run dev                   # http://localhost:3000
 
 Organizations work locally too: with `APP_DOMAIN=localhost`, `http://localhost:3000` is the platform and `http://blpa.localhost:3000` is the `blpa` organization (browsers send `*.localhost` to your machine).
 
-Without email and SMS providers, a local server prints sign-in codes in its log (`[dev email to …]`, `[dev sms to …]`), so you can create accounts without sending anything.
+Without an email provider, a local server prints sign-in codes in its log (`[dev email to …]`), so you can create accounts without sending anything.
 
 If `ADMIN_TOKEN` is unset and no admin account exists, BLST **fails closed**: nothing can be changed. For quick local experiments, set `ALLOW_OPEN_DEV=true` to allow changes without a key. That flag is ignored when deployed, and a deployed server refuses to start without a strong `ADMIN_TOKEN` (16 or more characters).
 
@@ -118,12 +118,13 @@ The button reads [`app.json`](app.json) and:
 The button uses this branch. After the branch is merged, change the URL's `tree/...` part to `tree/main`.
 
 **First sign-in after deploy:** open the app → **Admin & setup**. It asks you to **set up the admin account**:
-1. Enter the setup key: Heroku dashboard → your app → **Settings → Reveal Config Vars** → `ADMIN_TOKEN` (or `heroku config:get ADMIN_TOKEN -a <app>`), plus your email and mobile number.
-2. Enter the code that was emailed to you, then the code texted to your phone.
+1. Enter the setup key: Heroku dashboard → your app → **Settings → Reveal Config Vars** → `ADMIN_TOKEN` (or `heroku config:get ADMIN_TOKEN -a <app>`), plus your email.
+2. Enter the code that was emailed to you.
+3. Set up an authenticator app or a passkey, and save the backup codes.
 
-That makes you the **global admin**. From then on `ADMIN_TOKEN` no longer works as a password: every admin signs in with an emailed code **and** a texted code.
+That makes you the **platform admin**. From then on `ADMIN_TOKEN` no longer works as a password: every admin signs in with an emailed code **and** their authenticator app or passkey.
 
-**Email and text messages.** Set `RESEND_API_KEY` (or `SMTP_URL`, any SMTP service) and `EMAIL_FROM` and the Twilio vars (`TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_FROM_NUMBER`). Until they're set, the Deploy button's `AUTH_LOG_CODES=true` prints codes in the Heroku log (`heroku logs --tail`) so you can test. Set `AUTH_LOG_CODES=false` once real sending works.
+**Email.** Set `RESEND_API_KEY` (or `SMTP_URL`, any SMTP service) and `EMAIL_FROM`. Until then, the Deploy button's `AUTH_LOG_CODES=true` prints codes in the Heroku log (`heroku logs --tail`) so you can test. Set `AUTH_LOG_CODES=false` once real sending works.
 
 ### From the command line
 
@@ -132,7 +133,6 @@ heroku create blst-test
 heroku addons:create heroku-postgresql:essential-0
 heroku config:set ADMIN_TOKEN="$(openssl rand -hex 24)" AUTH_SECRET="$(openssl rand -hex 32)"
 heroku config:set SMTP_URL="smtps://USER:PASS@smtp.example.com:465" EMAIL_FROM="BLST <no-reply@example.org>"
-heroku config:set TWILIO_ACCOUNT_SID="AC..." TWILIO_AUTH_TOKEN="..." TWILIO_FROM_NUMBER="+15551234567"
 git push heroku claude/great-bardeen-wfd39q:main
 heroku run npm run seed          # optional demo tournament
 heroku open
@@ -142,13 +142,13 @@ The `Procfile` runs migrations in the release phase. TLS to Heroku Postgres is t
 
 ## Accounts and sign-in
 
-Everyone signs in the same way, with **two one-time codes**: one emailed to them, then one texted to their phone. There are no passwords. BLST stores only each account's **email address and mobile number** (plus which organizations it belongs to).
+Everyone signs in with a **one-time code emailed to them**; there are no passwords. **Admins and scorekeepers** also confirm with an **authenticator app** (Google Authenticator, 1Password, …) or a **passkey** (Face ID, fingerprint, Windows Hello), which they set up the first time they sign in with staff access; until they do, they have no staff access. Each gets ten one-time **backup codes**. No text messages, no phone numbers: BLST stores only each account's **email address** (plus which organizations it belongs to and its sign-in factors).
 
 - **Anyone** can create an account at `/account` (**Create account**). An account with no organization has no staff access.
 - **Organization admins** give people access under **Admin → Organization → People**: *Scorekeeper* (optionally limited to one tournament) or *Admin*. The last admin of an organization can't be removed.
-- **Platform admins** disable, sign out or delete accounts, and make other platform admins, at `/platform`. The last platform admin can't be removed.
+- **Platform admins** disable, sign out or delete accounts, make other platform admins, and **reset someone's second factor** (lost phone) at `/platform`. The last platform admin can't be removed.
 - **Sessions:** follow the person's strongest access anywhere: admins stay signed in for 12 hours, scorekeepers 24 hours, everyone else 30 days. Anyone can **sign out everywhere** or **delete their account** from `/account`.
-- **Lost phone (admin):** another admin can update access, or the account holder can sign in and change their number (that needs the emailed code and a code to the new number). If the only admin loses their phone, set `ADMIN_TOKEN_BREAK_GLASS=true`, sign in with `ADMIN_TOKEN` under Admin → *Use an API key instead*, fix things, then remove the flag.
+- **Lost phone:** use a backup code, then set up a new authenticator or passkey at `/account`. No backup codes left? A platform admin resets the second factor at `/platform` → Accounts; they then sign in with the emailed code and set up a new one. If the only platform admin is locked out, set `ADMIN_TOKEN_BREAK_GLASS=true`, use `ADMIN_TOKEN` under Admin → *Use an API key instead*, reset it at `/platform`, then remove the flag.
 - **API keys** are still there for machines and shared rink iPads (Admin → API keys).
 
 ## Team logos
@@ -260,7 +260,7 @@ Re-broadcasting LiveBarn video needs LiveBarn's permission. The overlay is meant
 ## Security
 
 BLST follows the OWASP Top 10 (2021) and OWASP API Security Top 10 (2023). See **[SECURITY.md](SECURITY.md)** for the control-by-control mapping, the operator checklist and residual risks. In short:
-- **Accounts:** MFA for every sign-in (emailed code + texted code); short admin sessions; only email and phone stored.
+- **Accounts:** emailed code for everyone, plus an authenticator app or passkey for admins and scorekeepers; short admin sessions; only the email address is stored.
 - **Keys:** scoped, expiring API keys; brute-force lockout.
 - **Limits:** rate and size limits.
 - **Network:** SSRF protection for webhooks and link checks.

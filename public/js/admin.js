@@ -11,14 +11,15 @@
     const box = h("div");
     mount(app, h("div", { class: "card auth-card" },
       h("h1", null, status.setup_needed ? "Set up the admin account" : "Admin sign-in"),
-      me.role ? h("p", { class: "notice" }, "You're signed in, but this account isn't an admin. Ask an admin for access.") : "",
+      me.role && !me.mfa_required ? h("p", { class: "notice" }, "You're signed in, but this account isn't an admin. Ask an admin for access.") : "",
       box,
       status.setup_needed ? "" : h("details", null, h("summary", null, "Use an API key instead"), keyForm())));
+    if (me.mfa_required) return BLST.mfaSetup(box, { required: true, onDone: () => location.reload() });
     BLST.signInFlow(box, {
       mode: status.setup_needed ? "setup" : "login",
       intro: status.setup_needed
-        ? "No admin account exists yet. Create the global admin: it signs in with an emailed code and a text-message code every time. After that, the admin password (ADMIN_TOKEN) stops working."
-        : "Admins sign in with two codes: one emailed, one texted to your phone.",
+        ? "No admin account exists yet. Create the platform admin: after the emailed code you'll set up an authenticator app or passkey. After that, the admin password (ADMIN_TOKEN) stops working."
+        : "Admins sign in with an emailed code, then their authenticator app or passkey.",
       onDone: () => location.reload(),
     });
   }
@@ -1097,11 +1098,11 @@
     };
     mount(el, h("div", { class: "card" },
       h("div", { class: "row between" }, h("h2", { style: { margin: 0 } }, "People"), h("button", { class: "primary", onclick: addPerson }, "Add a person")),
-      h("p", { class: "muted small" }, "Admins run everything here; scorekeepers run games. Everyone signs in with an emailed code and a texted code. ",
+      h("p", { class: "muted small" }, "Admins run everything here; scorekeepers run games. They sign in with an emailed code plus an authenticator app or passkey, which they set up the first time. ",
         "Fans don't need an account."),
       table([
         { key: "email", label: "Email", fmt: (m) => h("span", null, m.email, m.account_id === me.account_id ? h("span", { class: "badge", style: { marginLeft: "6px" } }, "you") : "") },
-        { key: "phone", label: "Mobile" },
+        { key: "second_factor", label: "2nd step", fmt: (m) => (m.second_factor ? "✓" : h("span", { class: "muted small" }, "not set up")) },
         { key: "role", label: "Access", fmt: (m) => `${roleLabel[m.role]}${m.role === "scorekeeper" && m.tournament ? ` · ${m.tournament}` : ""}` },
         { key: "last_login_at", label: "Last sign-in", fmt: (m) => (m.last_login_at ? fmtDate(m.last_login_at) : "never") },
         { key: "disabled", label: "", sort: false, fmt: (m) => h("div", { class: "row" },
@@ -1425,14 +1426,14 @@
     mount(view,
       h("div", { class: "card" }, h("h2", null, "Security checklist"),
         h("ul", { class: "stack", style: { listStyle: "none", padding: 0 } },
-          ok(sec.accounts.admins > 0, sec.accounts.admins > 0 ? `${sec.accounts.admins} admin account(s), all signing in with email + text-message codes` : "No admin account yet: set one up (Account → Set up admin)"),
+          ok(sec.accounts.admins > 0, sec.accounts.admins > 0 ? `${sec.accounts.admins} platform admin account(s)` : "No admin account yet: set one up (Account → Set up admin)"),
           sec.accounts.admins > 0
             ? ok(!sec.accounts.admin_token_break_glass, sec.accounts.admin_token_break_glass ? "ADMIN_TOKEN_BREAK_GLASS is on: the admin password works without MFA. Turn it off when you're done." : "Admin password (ADMIN_TOKEN) is retired: admins must use MFA")
             : ok(!sec.admin_token_set || sec.admin_token_strong, sec.admin_token_set
               ? (sec.admin_token_strong ? "Strong setup key (ADMIN_TOKEN) is set" : "ADMIN_TOKEN is too short: use at least 16 random characters")
               : "A one-time setup key is printed in the server log at each start until the first admin exists"),
           ok(sec.accounts.email_configured, sec.accounts.email_configured ? "Email codes are sent (Resend or SMTP)" : "Email isn't set up (RESEND_API_KEY or SMTP_URL): codes only appear in the server log"),
-          ok(sec.accounts.sms_configured, sec.accounts.sms_configured ? `Text-message codes are sent by Twilio (countries: +${sec.accounts.sms_country_codes.join(", +")})` : "Text messages aren't set up (TWILIO_*): codes only appear in the server log"),
+          ok(sec.accounts.staff_without_second_factor === 0, sec.accounts.staff_without_second_factor === 0 ? "Every admin and scorekeeper here has an authenticator app or passkey" : `${sec.accounts.staff_without_second_factor} admin(s)/scorekeeper(s) haven't set up an authenticator or passkey yet (no staff access until they do)`),
           ok(!sec.deployed || !sec.accounts.codes_in_log, sec.accounts.codes_in_log ? "Sign-in codes are printed in the server log (development)" : "Sign-in codes are never logged"),
           ok(true, sec.accounts.auth_secret_set ? "AUTH_SECRET is set" : "AUTH_SECRET was generated on first start and is kept in the database"),
           ok(!sec.open_dev_mode, sec.open_dev_mode ? "Open development mode is ON: anyone can make changes" : "Changes require an account or key"),

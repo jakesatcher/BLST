@@ -302,11 +302,12 @@ test("Audit F2 / API5: an admin API key can't hand out access or send data off-s
     ["PATCH", "/admin/members/1", { role: "admin" }],
     ["DELETE", "/admin/members/1"],
     ["PATCH", "/platform/accounts/1", { platform_admin: true }],
+    ["POST", "/platform/accounts/1/reset-mfa"],
     ["PATCH", "/platform/orgs/1", { status: "suspended" }],
   ]) {
     const r = await call(method, path, { token: key, ip, body: body || {} });
     assert.equal(r.status, 403, `${method} ${path}`);
-    assert.match(r.body.error, /signed in with email/);
+    assert.match(r.body.error, /signed in with their account/);
   }
   // Day-to-day admin work with a key still works.
   assert.equal((await call("POST", "/tournaments", { token: key, ip, body: { name: "Key-made Cup" } })).status, 201);

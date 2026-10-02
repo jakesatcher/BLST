@@ -16,7 +16,7 @@
     const input = h("input", { type: "password", placeholder: "Paste your scorekeeper key", autocomplete: "off", style: { width: "100%" } });
     mount(app, h("div", { class: "card auth-card" },
       h("h1", null, "Scorekeeper sign-in"),
-      me.role === "user" ? h("p", { class: "notice" }, "You're signed in, but your account can't score games yet. Ask an admin to make you a scorekeeper.") : "",
+      me.role === "user" && !me.mfa_required ? h("p", { class: "notice" }, "You're signed in, but your account can't score games yet. Ask an admin to make you a scorekeeper.") : "",
       box,
       h("details", null, h("summary", null, "Use a device key instead"),
         h("form", { class: "stack", style: { marginTop: "8px" }, onsubmit: async (e) => {
@@ -29,9 +29,10 @@
           }
           location.reload();
         } }, h("p", { class: "small muted" }, "For a shared rink iPad: the scorekeeper key your admin made under Admin → API keys."), input, h("button", null, "Use key")))));
+    if (me.mfa_required) return BLST.mfaSetup(box, { required: true, onDone: () => location.reload() });
     BLST.signInFlow(box, {
       mode: "login",
-      intro: "Sign in with your account: we'll email you a code, then text one to your phone. An admin must have given your account scorekeeper access.",
+      intro: "Sign in with your account: we'll email you a code, then you use your authenticator app or passkey. An admin must have given your account scorekeeper access.",
       onDone: () => location.reload(),
     });
   }

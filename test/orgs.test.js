@@ -44,11 +44,15 @@ function call(method, hostName, path, { body, token, ip = nextIp() } = {}) {
 const api = (method, slug, path, opts) => call(method, host(slug), `/api/v1${path}`, opts);
 const codeFor = (to) => [...outbox].reverse().find((m) => m.to === to).text.match(/\b(\d{6})\b/)[1];
 
-async function signUp(email, phone) {
+/** Signs up and sets up an authenticator, so the session can use staff access it gets later. */
+async function signUp(email) {
   const ip = nextIp();
-  const s = await api("POST", "", "/auth/signup", { body: { email, phone }, ip });
-  await api("POST", "", "/auth/verify", { body: { challenge_id: s.body.challenge_id, code: codeFor(email) }, ip });
-  const done = await api("POST", "", "/auth/verify", { body: { challenge_id: s.body.challenge_id, code: codeFor(phone) }, ip });
+  const s = await api("POST", "", "/auth/signup", { body: { email }, ip });
+  const done = await api("POST", "", "/auth/verify", { body: { challenge_id: s.body.challenge_id, code: codeFor(email) }, ip });
+  const token = done.body.token;
+  const t = await api("POST", "", "/account/mfa/totp", { token, ip });
+  const code = require("../src/services/mfa").totpCode(t.body.secret.replace(/\s/g, ""));
+  assert.equal((await api("POST", "", "/account/mfa/totp/confirm", { token, body: { code }, ip })).status, 200);
   return done.body;
 }
 
@@ -89,7 +93,7 @@ test("addresses: the bare domain is the platform, <slug>.domain is that organiza
 });
 
 test("anyone can ask for an organization; it's live only after a platform admin approves it", async () => {
-  S.owner = await signUp("owner@metro.example", "+15553000001");
+  S.owner = await signUp("owner@metro.example");
   const reserved = await api("POST", "", "/platform/orgs", { token: S.owner.token, body: { name: "Bad", slug: "www" } });
   assert.equal(reserved.status, 400);
   assert.equal((await api("GET", "", "/platform/orgs/check?slug=blpa")).body.available, false);

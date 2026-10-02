@@ -71,6 +71,6 @@ else
 fi
 cat <<'DONE'
 Open the address above -> Admin & setup -> "Set up the admin account" and enter
-the setup key. Sign-in codes show in the blst logs until email/SMS are set up
+the setup key. Sign-in codes show in the blst logs until email is set up
 (see docs/RAILWAY.md).
 DONE

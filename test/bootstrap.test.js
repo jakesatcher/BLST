@@ -69,13 +69,13 @@ test("without ADMIN_TOKEN, a one-time setup key is printed and only it can creat
   const st = (await call("GET", "/auth/status")).body;
   assert.equal(st.setup_needed, true);
   assert.equal(st.setup_key_required, true);
-  assert.equal((await call("POST", "/auth/setup", { setup_key: "nope", email: "first@example.com", phone: "+15552020001" })).status, 403);
-  const start = await call("POST", "/auth/setup", { setup_key: key2, email: "first@example.com", phone: "+15552020001" });
+  assert.equal((await call("POST", "/auth/setup", { setup_key: "nope", email: "first@example.com" })).status, 403);
+  const start = await call("POST", "/auth/setup", { setup_key: key2, email: "first@example.com" });
   assert.equal(start.status, 202);
-  const s2 = await call("POST", "/auth/verify", { challenge_id: start.body.challenge_id, code: codeFor("first@example.com") });
-  const done = await call("POST", "/auth/verify", { challenge_id: start.body.challenge_id, code: codeFor("+15552020001") });
-  assert.equal(s2.body.step, "sms");
+  const done = await call("POST", "/auth/verify", { challenge_id: start.body.challenge_id, code: codeFor("first@example.com") });
+  assert.equal(done.body.step, "done");
   assert.equal(done.body.account.platform_admin, true);
+  assert.equal(done.body.mfa_setup_required, true, "then an authenticator or passkey");
 
   // Once an admin exists no key is printed and the stored hashes are gone.
   assert.equal(await bootstrap.ensureSetupKey({ log: () => {} }), null);

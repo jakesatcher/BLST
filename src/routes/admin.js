@@ -14,6 +14,7 @@ router.get("/me", (req, res) => {
   res.json({
     role: req.auth.role, via: req.auth.via, key_name: req.auth.keyName || null, tournament_id: req.auth.tournamentId || null,
     account_id: req.auth.accountId || null, email: req.auth.email || null, platform_admin: Boolean(req.auth.platformAdmin),
+    mfa_required: Boolean(req.auth.mfaRequired),
     org: req.org ? { slug: req.org.slug, name: req.org.name, factions_enabled: req.org.factions_enabled } : null,
   });
 });
@@ -99,13 +100,16 @@ router.get("/admin/security", admin, async (_req, res) => {
                                count(*) FILTER (WHERE role = 'scorekeeper' AND disabled_at IS NULL) AS scorekeepers,
                                count(*) FILTER (WHERE role = 'user' AND disabled_at IS NULL) AS users FROM accounts`)),
       email_configured: require("../services/notify").emailConfigured(),
-      sms_configured: require("../services/notify").smsConfigured(),
+      // People with staff access here who haven't set up an authenticator or passkey yet.
+      staff_without_second_factor: (await db.one(
+        `SELECT count(*)::int AS n FROM org_members m JOIN accounts a ON a.id = m.account_id
+          WHERE a.disabled_at IS NULL AND a.totp_secret_enc IS NULL
+            AND NOT EXISTS (SELECT 1 FROM account_passkeys k WHERE k.account_id = a.id)`)).n,
       auth_secret_set: Boolean(process.env.AUTH_SECRET),
       auth_secret_source: process.env.AUTH_SECRET ? "config" : "database",
       codes_in_log: config.auth.logCodes,
       admin_token_retired: !config.auth.adminTokenBreakGlass,
       admin_token_break_glass: config.auth.adminTokenBreakGlass,
-      sms_country_codes: config.auth.smsCountryCodes,
     },
   });
 });

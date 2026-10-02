@@ -4,7 +4,9 @@ const accounts = require("../services/accounts");
 const notify = require("../services/notify");
 const { rateLimit } = require("../lib/rateLimit");
 const { requireAccount, requireRole, requireInteractiveAdmin } = require("../middleware/auth");
-const { badRequest } = require("../lib/http");
+const { badRequest, HttpError } = require("../lib/http");
+const db = require("../db");
+const mfa = require("../services/mfa");
 
 // Public sign-up / sign-in endpoints (/api/v1/auth/*) and the signed-in
 // account's own settings (/api/v1/account*).
@@ -23,14 +25,12 @@ router.get("/auth/status", async (req, res) => {
     setup_needed: setup.needed,
     setup_key_required: setup.key_required,
     email_ready: notify.emailConfigured() || config.auth.logCodes,
-    sms_ready: notify.smsConfigured() || config.auth.logCodes,
     dev_codes: !notify.emailConfigured() && config.auth.logCodes ? "codes are printed in the server log" : null,
-    sms_country_codes: config.auth.smsCountryCodes,
   });
 });
 
 router.post("/auth/signup", starts, async (req, res) => {
-  res.status(202).json(await accounts.startSignup(str(req.body.email), str(req.body.phone)));
+  res.status(202).json(await accounts.startSignup(str(req.body.email)));
 });
 
 router.post("/auth/login", starts, async (req, res) => {
@@ -38,15 +38,21 @@ router.post("/auth/login", starts, async (req, res) => {
 });
 
 router.post("/auth/setup", starts, async (req, res) => {
-  res.status(202).json(await accounts.startSetup(str(req.body.setup_key), str(req.body.email), str(req.body.phone)));
+  res.status(202).json(await accounts.startSetup(str(req.body.setup_key), str(req.body.email)));
 });
 
 router.post("/auth/verify", verifies, async (req, res) => {
-  if (!req.body.code) throw badRequest("Enter the 6-digit code.");
-  const r = await accounts.verify(str(req.body.challenge_id), str(String(req.body.code)), { accountId: req.auth.accountId, sessionId: req.auth.sessionId });
+  const passkey = req.body.passkey && typeof req.body.passkey === "object" ? req.body.passkey : null;
+  if (!req.body.code && !passkey) throw badRequest("Enter the code.");
+  const r = await accounts.verify(str(req.body.challenge_id), str(String(req.body.code || "")).slice(0, 40), { passkey, req });
   // The audit log records who signed in (by account id, never email).
   if (r.account) req.auth.actor = `account:${r.account.id}`;
   res.json(r);
+});
+
+/** Passkey sign-in: options for the second step of a sign-in. */
+router.post("/auth/passkey-options", verifies, async (req, res) => {
+  res.json(await accounts.passkeyOptions(req, str(req.body.challenge_id)));
 });
 
 router.post("/auth/resend", starts, async (req, res) => {
@@ -67,9 +73,70 @@ router.get("/account", requireAccount, async (req, res) => {
   res.json({ ...a, orgs: a.orgs.map((o) => ({ ...o, url: orgUrl(o.slug, req) })) });
 });
 
-/** New mobile number: confirm by email code, then a code to the new number. */
-router.post("/account/phone", requireAccount, starts, async (req, res) => {
-  res.status(202).json(await accounts.startPhoneChange(req.auth.accountId, str(req.body.phone)));
+// Second factor: authenticator app, passkeys and backup codes. Setting up the
+// first one needs only a signed-in session (and upgrades it to verified);
+// once an account has one, changes need a session that passed it.
+
+function mfaChange(req, _res, next) {
+  if (req.auth.sessionMfa) return next();
+  mfa.hasSecondFactor(req.auth.accountId).then((has) => {
+    if (has) return next(new HttpError(403, "Sign out and sign back in with your authenticator or passkey to change this."));
+    next();
+  }, next);
+}
+async function accountRow(req) {
+  return db.one("SELECT id, email FROM accounts WHERE id = $1", [req.auth.accountId]);
+}
+async function afterFirstFactor(req) {
+  if (!req.auth.sessionMfa) await accounts.markSessionMfa(req.auth.sessionId);
+}
+/** Staff must keep at least one second factor. */
+async function assertCanRemove(req) {
+  const acct = await db.one("SELECT * FROM accounts WHERE id = $1", [req.auth.accountId]);
+  const s = await mfa.status(acct.id);
+  const count = (s.totp ? 1 : 0) + s.passkeys.length;
+  if (count <= 1 && (await accounts.strongestRole(acct)) !== "user") {
+    throw new HttpError(409, "Admins and scorekeepers need a second factor. Add another one before removing this.");
+  }
+}
+
+router.post("/account/mfa/totp", requireAccount, mfaChange, async (req, res) => {
+  const acct = await accountRow(req);
+  res.json(await mfa.startTotp(acct.id, acct.email));
+});
+
+router.post("/account/mfa/totp/confirm", requireAccount, verifies, mfaChange, async (req, res) => {
+  const backupCodes = await mfa.confirmTotp(req.auth.accountId, str(String(req.body.code || "")));
+  await afterFirstFactor(req);
+  res.json({ ok: true, backup_codes: backupCodes });
+});
+
+router.delete("/account/mfa/totp", requireAccount, mfaChange, async (req, res) => {
+  await assertCanRemove(req);
+  await mfa.removeTotp(req.auth.accountId);
+  res.status(204).end();
+});
+
+router.post("/account/mfa/passkeys/options", requireAccount, mfaChange, async (req, res) => {
+  res.json(await mfa.passkeyRegistrationOptions(req, await accountRow(req)));
+});
+
+router.post("/account/mfa/passkeys", requireAccount, verifies, mfaChange, async (req, res) => {
+  if (!req.body.response || typeof req.body.response !== "object") throw badRequest("response is required");
+  const backupCodes = await mfa.finishPasskeyRegistration(req, await accountRow(req), req.body.response, str(req.body.name));
+  await afterFirstFactor(req);
+  res.status(201).json({ ok: true, backup_codes: backupCodes });
+});
+
+router.delete("/account/mfa/passkeys/:id", requireAccount, mfaChange, async (req, res) => {
+  await assertCanRemove(req);
+  await mfa.removePasskey(req.auth.accountId, String(req.params.id).slice(0, 512));
+  res.status(204).end();
+});
+
+router.post("/account/mfa/backup-codes", requireAccount, mfaChange, async (req, res) => {
+  if (!(await mfa.hasSecondFactor(req.auth.accountId))) throw badRequest("Set up an authenticator app or passkey first.");
+  res.json({ backup_codes: await mfa.regenerateBackupCodes(req.auth.accountId) });
 });
 
 router.post("/account/logout-all", requireAccount, async (req, res) => {
