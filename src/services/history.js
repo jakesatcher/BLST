@@ -56,7 +56,7 @@ async function allTournamentStats(where = "TRUE", params = []) {
 async function allTime() {
   const [players, history, stats] = await Promise.all([
     db.many(`SELECT ${data.PUBLIC_PLAYER_COLS}, p.player_code FROM players p`),
-    db.many("SELECT * FROM historical_stats"),
+    db.many("SELECT * FROM historical_stats WHERE tournament_id IS NULL"), // the rest count through their tournament
     allTournamentStats(),
   ]);
   const by = new Map();
@@ -151,9 +151,9 @@ async function club(id) {
   if (!c) throw notFound("team");
   const [teams, history] = await Promise.all([
     db.many(
-      `SELECT tm.*, t.name AS tournament_name, t.season, t.start_date FROM teams tm JOIN tournaments t ON t.id = tm.tournament_id
+      `SELECT tm.*, t.name AS tournament_name, t.season, t.start_date, t.imported FROM teams tm JOIN tournaments t ON t.id = tm.tournament_id
         WHERE tm.club_id = $1 ORDER BY t.start_date NULLS LAST, t.id`, [id]),
-    db.many("SELECT * FROM historical_stats WHERE club_id = $1 ORDER BY season NULLS FIRST, id", [id]),
+    db.many("SELECT * FROM historical_stats WHERE club_id = $1 AND tournament_id IS NULL ORDER BY season NULLS FIRST, id", [id]),
   ]);
   const players = new Map();
   const get = (pid) => {
@@ -166,8 +166,8 @@ async function club(id) {
     const row = s.standings.find((r) => r.team_id === tm.id) || null;
     seasons.push({
       kind: "tournament", tournament_id: tm.tournament_id, tournament: tm.tournament_name, season: tm.season, team_id: tm.id,
-      team_name: tm.name, final_placement: tm.final_placement, standing: row ? { gp: row.gp, w: row.w, l: row.l, otl: row.otl, t: row.t, pts: row.pts, gf: row.gf, ga: row.ga } : null,
-      rank: row ? s.standings.indexOf(row) + 1 : null, teams: s.standings.length,
+      team_name: tm.name, final_placement: tm.final_placement, imported: tm.imported, standing: row && row.gp ? { gp: row.gp, w: row.w, l: row.l, otl: row.otl, t: row.t, pts: row.pts, gf: row.gf, ga: row.ga } : null,
+      rank: row && row.gp ? s.standings.indexOf(row) + 1 : null, teams: s.standings.length,
     });
     for (const l of s.skaters) {
       const split = l.by_team.find((b) => b.team_id === tm.id);

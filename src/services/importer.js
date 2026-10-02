@@ -216,11 +216,61 @@ function friendly(err) {
   return err.message;
 }
 
-/** Imports prior-season / prior-event stat lines into historical_stats. */
+/**
+ * The tournament (and team) an imported line belongs to. With
+ * `tournament_id` every row goes to that tournament; otherwise rows with an
+ * event name join the tournament with that name and season, which is
+ * created (marked imported, completed) when it doesn't exist. Teams are
+ * found or created by name inside it.
+ */
+async function importTarget(c, body, v, report, batch) {
+  let tournamentId = body.tournament_id ? Number(body.tournament_id) : null;
+  if (tournamentId) {
+    const t = (await c.query("SELECT id, name, season FROM tournaments WHERE id = $1", [tournamentId])).rows[0];
+    if (!t) throw new Error(`tournament ${tournamentId} not found`);
+    report.tournaments[t.id] = report.tournaments[t.id] || { id: t.id, name: t.name, season: t.season, created: false };
+  } else if (body.link_tournaments !== false && v.event_name) {
+    const name = String(v.event_name).slice(0, 120);
+    const season = v.season ? String(v.season).slice(0, 40) : null;
+    let t = (await c.query(
+      "SELECT id, name, season FROM tournaments WHERE lower(name) = lower($1) AND coalesce(lower(season), '') = coalesce(lower($2), '') ORDER BY id LIMIT 1",
+      [name, season])).rows[0];
+    let created = false;
+    if (!t) {
+      t = (await c.query(
+        `INSERT INTO tournaments (name, season, status, imported, import_batch, format, num_teams)
+         VALUES ($1, $2, 'completed', TRUE, $3, $4, 2) RETURNING id, name, season`,
+        [name, season, batch, body.format === "team" || body.club_teams ? "team" : "draft"])).rows[0];
+      created = true;
+    }
+    tournamentId = t.id;
+    report.tournaments[t.id] = report.tournaments[t.id] || { id: t.id, name: t.name, season: t.season, created };
+  }
+  if (!tournamentId) return { tournamentId: null, teamId: null };
+  let teamId = null;
+  if (v.team_name) {
+    const tn = String(v.team_name).slice(0, 80);
+    const found = (await c.query("SELECT id FROM teams WHERE tournament_id = $1 AND blst_team_key(name) = blst_team_key($2) LIMIT 1", [tournamentId, tn])).rows[0];
+    teamId = found ? found.id : (await c.query("INSERT INTO teams (tournament_id, name) VALUES ($1, $2) RETURNING id", [tournamentId, tn])).rows[0].id;
+    // Imported tournaments' team count follows the teams in the file.
+    await c.query(
+      `UPDATE tournaments SET num_teams = GREATEST(2, LEAST(64, (SELECT count(*) FROM teams WHERE tournament_id = $1)))
+        WHERE id = $1 AND imported`, [tournamentId]);
+  }
+  return { tournamentId, teamId };
+}
+
+/**
+ * Imports prior-season / prior-event stat lines. Lines that name an event
+ * (or with `tournament_id`) are kept with that tournament, so it has its own
+ * stats page, and count toward players' and teams' all-time totals through it.
+ */
 async function importHistorical(body) {
   const batch = body.batch || `import-${new Date().toISOString()}`;
   const create = body.create_missing_players !== false;
+  const tournaments = {};
   const report = await runImport(body, async (c, row, rep) => {
+    rep.tournaments = tournaments;
     const player = await resolvePlayer(c, row, { create, report: rep });
     const v = {};
     for (const [field, aliases] of Object.entries(HISTORY_ALIASES)) v[field] = pick(row, aliases);
@@ -233,16 +283,18 @@ async function importHistorical(body) {
       line.gp = 0;
     }
     if (v.shots_against === undefined && v.saves !== undefined) line.shots_against = toInt(v.saves, "saves") + line.goals_against;
-    // Team tournaments: the team name is a team that carries over (a club).
-    if (body.club_teams && v.team_name) {
+    // Team tournaments (or the box ticked): the team name is a team that carries over.
+    if ((body.club_teams || body.format === "team") && v.team_name) {
       await c.query("INSERT INTO clubs (name) VALUES ($1) ON CONFLICT (org_id, name_key) DO NOTHING", [String(v.team_name).slice(0, 80)]);
     }
-    const cols = ["player_id", "season", "event_name", "team_name", ...INT_FIELDS, "source", "import_batch"];
+    const target = await importTarget(c, body, v, rep, batch);
+    const cols = ["player_id", "season", "event_name", "team_name", ...INT_FIELDS, "source", "import_batch", "tournament_id", "team_id"];
     const vals = [player.id, v.season ?? null, v.event_name ?? null, v.team_name ?? null, ...INT_FIELDS.map((f) => line[f]),
-      body.source || "import", batch];
+      body.source || "import", batch, target.tournamentId, target.teamId];
     await c.query(`INSERT INTO historical_stats (${cols.join(", ")}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(", ")})`, vals);
   });
   report.batch = batch;
+  report.tournaments = Object.values(tournaments);
   return report;
 }
 

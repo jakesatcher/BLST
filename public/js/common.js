@@ -598,7 +598,64 @@
     return pill;
   }
 
-  Object.assign(window.BLST, { openSheet, confirmSheet, formSheet, keepAwake, connectionPill });
+  const OFFICIAL_ROLES = [["referee", "Referee"], ["linesperson", "Linesperson"], ["scorekeeper", "Scorekeeper"], ["timekeeper", "Timekeeper"]];
+  const officialLabel = Object.fromEntries(OFFICIAL_ROLES);
+
+  /** "Referees: A, B · Scorekeeper: C" (grouped, in the order entered). */
+  function officialsText(list) {
+    const groups = [];
+    for (const o of list || []) {
+      let g = groups.find((x) => x.role === o.role);
+      if (!g) groups.push((g = { role: o.role, names: [] }));
+      g.names.push(o.name);
+    }
+    return groups.map((g) => `${officialLabel[g.role]}${g.names.length > 1 ? "s" : ""}: ${g.names.join(", ")}`).join(" · ");
+  }
+
+  /**
+   * Edits a game's officials of record (any number of referees,
+   * linespersons, scorekeepers and timekeepers). Resolves with the saved
+   * list, or null when cancelled.
+   */
+  async function officialsEditor(gameId, current) {
+    const list = current || (await window.BLST.get(`/games/${gameId}/officials`));
+    const rows = h("div", { class: "stack" });
+    const err = h("div", { class: "notice error hidden" });
+    const addRow = (o = {}) => {
+      const roleSel = h("select", { "aria-label": "Role" }, OFFICIAL_ROLES.map(([v, l]) => h("option", { value: v, selected: v === (o.role || "referee") }, l)));
+      const name = h("input", { value: o.name || "", placeholder: "Name", maxlength: 80, "aria-label": "Name", autocomplete: "off" });
+      const row = h("div", { class: "officials-row" }, roleSel, name,
+        h("button", { type: "button", class: "ghost sm", "aria-label": "Remove", onclick: () => row.remove() }, "✕"));
+      rows.appendChild(row);
+      return name;
+    };
+    if (list.length) list.forEach(addRow);
+    else {
+      addRow({ role: "referee" });
+      addRow({ role: "referee" });
+      addRow({ role: "scorekeeper" });
+    }
+    return new Promise((resolve) => {
+      const { close } = openSheet("Officials of record", h("div", { class: "stack" },
+        h("p", { class: "muted small", style: { margin: 0 } }, "Everyone who officiated this game. Add as many referees, linespersons, scorekeepers and timekeepers as there were."),
+        rows,
+        h("button", { type: "button", onclick: () => addRow({ role: "referee" }).focus() }, "+ Add an official"),
+        err), (c) => [
+        h("button", { type: "button", onclick: () => c(null) }, "Cancel"),
+        h("button", { type: "button", class: "primary", onclick: async () => {
+          const officials = [...rows.querySelectorAll(".officials-row")].map((r) => ({ role: r.querySelector("select").value, name: r.querySelector("input").value.trim() })).filter((o) => o.name);
+          try {
+            close(await window.BLST.api("PUT", `/games/${gameId}/officials`, { officials }));
+          } catch (e) {
+            err.textContent = e.message;
+            err.classList.remove("hidden");
+          }
+        } }, "Save"),
+      ], { onClose: resolve });
+    });
+  }
+
+  Object.assign(window.BLST, { openSheet, confirmSheet, formSheet, keepAwake, connectionPill, officialsEditor, officialsText });
 })();
 
 /* Team / tournament graphics. */

@@ -482,3 +482,17 @@ button.link { background: none; border: 0; padding: 6px 0; color: var(--accent);
 }
 .match-pair { display: grid; gap: 4px; margin-bottom: 8px; }
 .match-arrow { color: var(--muted); }
+/* New tournament: type choice and one line per team name */
+.type-choice { border: 0; padding: 0; margin: 0; display: grid; gap: 8px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.type-choice legend { font-size: 0.85rem; color: var(--muted); margin-bottom: 6px; padding: 0; }
+.type-option { flex-direction: row; align-items: flex-start; gap: 10px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text); cursor: pointer; }
+.type-option.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.type-option input { margin-top: 2px; }
+.type-option > span { display: grid; gap: 2px; }
+.field-label { font-size: 0.85rem; color: var(--muted); margin-bottom: 6px; }
+.team-name-lines { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.team-line { flex-direction: row; align-items: center; gap: 8px; }
+.team-line input { flex: 1; min-width: 0; }
+.team-line-no { width: 1.6em; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+.officials-row { display: grid; grid-template-columns: 9.5em 1fr auto; gap: 8px; align-items: center; }
+@media (max-width: 420px) { .officials-row { grid-template-columns: 1fr auto; } .officials-row select { grid-column: 1 / -1; } }

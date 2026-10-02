@@ -9,9 +9,11 @@
   let t = await get(`/tournaments/${id}`);
   document.title = `${t.name} · ${BLST.org ? BLST.org.name : "BLST"}`;
   const view = h("div");
-  const names = [["scores", "Scores"], ["standings", "Standings"], ["leaders", "Leaders"], ["skaters", "Skaters"], ["goalies", "Goalies"], ["teams", "Teams"]];
+  // Imported tournaments (from a stats file) have player stats but no games.
+  const importedOnly = t.imported && !(await get(`/tournaments/${id}/games`)).length;
+  const names = [...(importedOnly ? [] : [["scores", "Scores"], ["standings", "Standings"]]), ["leaders", "Leaders"], ["skaters", "Skaters"], ["goalies", "Goalies"], ["teams", "Teams"]];
   if (t.factions_event_id && BLST.org && BLST.org.factions_enabled) names.push(["orders", "Factions"]);
-  const tabBar = tabs(names, (tab) => { history.replaceState(null, "", `?id=${id}#${tab}`); show(tab); }, location.hash.slice(1) || "scores");
+  const tabBar = tabs(names, (tab) => { history.replaceState(null, "", `?id=${id}#${tab}`); show(tab); }, location.hash.slice(1) || (importedOnly ? "leaders" : "scores"));
 
   mount(
     app,
@@ -21,7 +23,7 @@
       h("div", { class: "row" },
         h("a", { class: "btn", href: `/api/v1/export/tournaments/${id}/skaters?format=csv` }, "Skaters CSV"),
         h("a", { class: "btn", href: `/api/v1/export/tournaments/${id}` }, "JSON"))),
-    h("div", { style: { height: "12px" } }),
+    importedOnly ? h("p", { class: "notice small" }, "Imported from a stats file: player and team totals, no game-by-game scores.") : h("div", { style: { height: "12px" } }),
     tabBar.el,
     view,
   );

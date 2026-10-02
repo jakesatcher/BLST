@@ -67,7 +67,7 @@ test("draft tournaments: a player's stats follow them from team to team, plus im
   assert.equal(top[0].player_id, S.ann);
   // The player page keeps each tournament's team.
   const career = (await api("GET", `/players/${S.ann}/career`)).body;
-  assert.deepEqual(career.tournaments.map((l) => l.roster.team_name), ["Red", "Gold"]);
+  assert.deepEqual(career.tournaments.map((l) => l.roster.team_name), ["Orange", "Red", "Gold"], "the imported event is a tournament too");
 });
 
 test("team tournaments: teams carry over, with their record and their players' stats", async () => {
@@ -92,8 +92,8 @@ test("team tournaments: teams carry over, with their record and their players' s
   // An admin folds the second spelling into the first.
   const other = clubs.find((c) => c.name === "Timber-Wolves");
   const merged = (await api("POST", `/clubs/${wolves.id}/merge`, { from_club_id: other.id })).body;
-  assert.equal(merged.seasons.filter((s) => s.kind === "tournament").length, 2);
-  assert.ok(merged.seasons.some((s) => s.kind === "imported" && s.season === "2024"), "imported season shows too");
+  assert.equal(merged.seasons.filter((s) => s.kind === "tournament" && !s.imported).length, 2);
+  assert.ok(merged.seasons.some((s) => s.imported && s.season === "2024" && s.tournament === "Summer League"), "imported season shows too");
 
   const w = merged.players;
   const eve = w.find((p) => p.player_id === S.eve);
@@ -182,4 +182,75 @@ test("emails can be attached to imported players in bulk", async () => {
   assert.equal(byName.linked, 1);
   // Admin only.
   assert.equal((await api("POST", "/admin/identity/emails", { csv }, null)).status, 401);
+});
+
+test("an imported stats file keeps its tournament: its own stats page, counted once in all-time totals", async () => {
+  const csv = [
+    "first_name,last_name,email,season,event,team,position,gp,g,a,pim",
+    "Zed,Imported,zed@example.com,2021,Winter Classic,Hawks,C,4,5,2,2",
+    "Yul,Imported,,2021,Winter Classic,Hawks,D,4,1,3,4",
+    "Xia,Imported,,2021,Winter Classic,Owls,LW,4,2,2,0",
+    "Wes,Goalie,,2021,Winter Classic,Owls,G,4,0,0,0",
+  ].join("\n");
+  const dry = (await api("POST", "/import/historical", { csv, dry_run: true })).body;
+  assert.deepEqual(dry.tournaments.map((t) => [t.name, t.created]), [["Winter Classic", true]]);
+  assert.equal((await db.many("SELECT 1 FROM tournaments WHERE name = 'Winter Classic'")).length, 0, "dry run creates nothing");
+  const r = (await api("POST", "/import/historical", { csv })).body;
+  assert.equal(r.committed, true, JSON.stringify(r));
+  const tid = r.tournaments[0].id;
+  const t = (await api("GET", `/tournaments/${tid}`)).body;
+  assert.equal(t.imported, true);
+  assert.equal(t.status, "completed");
+  assert.deepEqual(t.teams.map((x) => x.name).sort(), ["Hawks", "Owls"]);
+  // The tournament's own stats.
+  const sk = (await api("GET", `/tournaments/${tid}/stats/skaters`)).body;
+  const zed = sk.find((x) => x.last_name === "Imported" && x.first_name === "Zed");
+  assert.equal(zed.goals, 5);
+  assert.equal(zed.points, 7);
+  assert.equal(zed.team, "Hawks");
+  const teams = (await api("GET", `/tournaments/${tid}/teams`)).body;
+  assert.deepEqual(teams.find((x) => x.name === "Owls").roster.map((p) => p.first_name).sort(), ["Wes", "Xia"]);
+  // Counted once in all-time totals and the player's career.
+  const dir = (await api("GET", "/history/players?q=zed")).body;
+  assert.equal(dir[0].skater.goals, 5);
+  assert.equal(dir[0].events, 1);
+  const career = (await api("GET", `/players/${zed.player_id}/career`)).body;
+  assert.equal(career.history.length, 0, "not listed twice");
+  assert.equal(career.tournaments.length, 1);
+  assert.equal(career.career.skater.goals, 5);
+  // The same file again adds to the same tournament (no duplicate tournament).
+  // Undoing the import removes the tournament it created.
+  assert.equal((await api("DELETE", `/import/batches/${encodeURIComponent(r.batch)}`)).status, 200);
+  assert.equal((await api("GET", `/tournaments/${tid}`)).status, 404);
+  // Rows can also be put into an existing tournament.
+  const existing = (await api("POST", "/tournaments", { name: "Shell Cup", num_teams: 2, team_names: ["Hawks", "Owls"] })).body;
+  const r2 = (await api("POST", "/import/historical", { csv, tournament_id: existing.id })).body;
+  assert.deepEqual(r2.tournaments.map((x) => [x.id, x.created]), [[existing.id, false]]);
+  assert.equal((await api("GET", `/tournaments/${existing.id}/stats/skaters`)).body.find((x) => x.first_name === "Zed").goals, 5);
+  assert.equal((await api("GET", `/tournaments/${existing.id}`)).body.teams.length, 2, "existing teams reused by name");
+});
+
+test("games have officials of record, any number of each", async () => {
+  const t = (await api("POST", "/tournaments", { name: "Officials Cup", num_teams: 2, team_names: ["A Team", "B Team"] })).body;
+  const ts = (await api("GET", `/tournaments/${t.id}`)).body.teams;
+  const g = (await api("POST", `/tournaments/${t.id}/games`, { home_team_id: ts[0].id, away_team_id: ts[1].id })).body;
+  const list = [{ role: "referee", name: "Ref One" }, { role: "referee", name: "Ref Two" }, { role: "linesperson", name: "Lin" },
+    { role: "scorekeeper", name: "Sco One" }, { role: "scorekeeper", name: "Sco Two" }, { role: "referee", name: "  " }];
+  const put = await api("PUT", `/games/${g.id}/officials`, { officials: list });
+  assert.equal(put.status, 200, JSON.stringify(put.body));
+  assert.equal(put.body.length, 5, "blank names are dropped");
+  assert.deepEqual((await api("GET", `/games/${g.id}/officials`, undefined, null)).body.map((o) => o.name), ["Ref One", "Ref Two", "Lin", "Sco One", "Sco Two"]);
+  assert.equal((await api("GET", `/games/${g.id}`)).body.officials.length, 5, "in the live game snapshot");
+  assert.equal((await api("PUT", `/games/${g.id}/officials`, { officials: [{ role: "coach", name: "X" }] })).status, 400);
+  assert.equal((await api("PUT", `/games/${g.id}/officials`, { officials: [] }, null)).status, 401);
+  assert.equal((await api("PUT", `/games/${g.id}/officials`, { officials: [] })).body.length, 0, "cleared");
+});
+
+test("new tournaments: team names in order, and the tournament type", async () => {
+  const t = (await api("POST", "/tournaments", { name: "Typed Cup", num_teams: 4, format: "team", team_names: ["North Stars", "Team 2", "Seals", "Team 4"] })).body;
+  assert.equal(t.format, "team");
+  const teams = (await api("GET", `/tournaments/${t.id}`)).body.teams;
+  assert.deepEqual(teams.map((x) => x.name), ["North Stars", "Team 2", "Seals", "Team 4"]);
+  assert.ok(teams.find((x) => x.name === "North Stars").club_id, "a team tournament's named teams carry over");
+  assert.equal(teams.find((x) => x.name === "Team 2").club_id, null);
 });

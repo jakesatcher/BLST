@@ -26,7 +26,7 @@
     h("div", { class: "card" }, h("h2", null, "Season by season"),
       table([
         { key: "season", label: "Season", fmt: (s) => s.season || "—" },
-        { key: "event", label: "Event", fmt: (s) => (s.kind === "tournament" ? h("a", { href: `/tournament?id=${s.tournament_id}` }, s.tournament) : h("span", null, s.event || "Imported", h("span", { class: "muted small" }, " · imported"))) },
+        { key: "event", label: "Event", fmt: (s) => (s.kind === "tournament" ? h("span", null, h("a", { href: `/tournament?id=${s.tournament_id}` }, s.tournament), s.imported ? h("span", { class: "muted small" }, " · imported") : "") : h("span", null, s.event || "Imported", h("span", { class: "muted small" }, " · imported"))) },
         { key: "record", label: "Record", sort: false, fmt: (s) => (s.standing ? `${s.standing.w}-${s.standing.l}-${s.standing.otl}${s.standing.t ? `-${s.standing.t}` : ""}` : "—") },
         { key: "finish", label: "Finish", sort: false, fmt: (s) => (s.final_placement ? (s.final_placement === 1 ? "🏆 Champions" : ord(s.final_placement)) : s.rank ? `${ord(s.rank)} of ${s.teams}` : "—") },
       ], d.seasons, { sortKey: null })),

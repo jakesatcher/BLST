@@ -38,6 +38,11 @@ router.get("/import/batches", admin, async (_req, res) => {
 
 router.delete("/import/batches/:batch", admin, async (req, res) => {
   const r = await db.query("DELETE FROM historical_stats WHERE import_batch = $1", [req.params.batch]);
+  // Tournaments this import created (and nothing has been played in since) go too.
+  await db.query(
+    `DELETE FROM tournaments t WHERE t.imported AND t.import_batch = $1
+        AND NOT EXISTS (SELECT 1 FROM games g WHERE g.tournament_id = t.id)
+        AND NOT EXISTS (SELECT 1 FROM historical_stats h WHERE h.tournament_id = t.id)`, [req.params.batch]);
   if (!r.rowCount) throw notFound("import batch");
   res.json({ deleted: r.rowCount });
 });

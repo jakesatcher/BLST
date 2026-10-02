@@ -45,6 +45,10 @@
     const out = {};
     for (const el of form.elements) {
       if (!el.name) continue;
+      if (el.type === "radio") {
+        if (el.checked) out[el.name] = el.value;
+        continue;
+      }
       if (el.type === "checkbox") out[el.name] = el.checked;
       else if (el.value === "") out[el.name] = blankAsNull ? null : undefined;
       else if (el.type === "number" || el.dataset.num) out[el.name] = Number(el.value);
@@ -85,7 +89,9 @@
         `${r.imported}/${r.rows} rows OK · ${r.created_players} new players${r.created_teams ? ` · ${r.created_teams} new teams` : ""}${r.moved ? ` · ${r.moved} moved` : ""}`),
       !r.committed && !r.dry_run ? h("div", null, "Fix the rows below or tick “skip bad rows” and import again.") : "",
       r.errors.length ? h("ul", { class: "small" }, r.errors.slice(0, 50).map((e) => h("li", null, `Row ${e.row}: ${e.error}`))) : "",
-      r.errors.length > 50 ? h("div", { class: "small" }, `…and ${r.errors.length - 50} more`) : "");
+      r.errors.length > 50 ? h("div", { class: "small" }, `…and ${r.errors.length - 50} more`) : "",
+      r.tournaments && r.tournaments.length ? h("div", { class: "small", style: { marginTop: "6px" } }, "Tournaments: ",
+        r.tournaments.map((t, i) => [i ? ", " : "", t.created && r.dry_run ? `${t.name}${t.season ? ` (${t.season})` : ""} (new)` : h("a", { href: `/tournament?id=${t.id}`, target: "_blank" }, `${t.name}${t.season ? ` (${t.season})` : ""}`), t.created && !r.dry_run ? " (new)" : ""])) : "");
   }
 
   // -------------------------------------------------------------------------
@@ -161,12 +167,22 @@
           !ok && cta ? h("button", { class: "sm primary", onclick: go }, cta) : "")))));
   }
 
+  /** Tournament type: draft (teams drafted fresh) or team (the same teams carry over). */
+  function typeChooser(value) {
+    const opt = (v, title, text) => h("label", { class: `type-option${value === v ? " on" : ""}` },
+      h("input", { type: "radio", name: "format", value: v, checked: value === v,
+        onchange: (e) => { for (const el of e.target.closest(".type-choice").querySelectorAll(".type-option")) el.classList.toggle("on", el.contains(e.target)); } }),
+      h("span", null, h("strong", null, title), h("span", { class: "small muted" }, text)));
+    return h("fieldset", { class: "type-choice wide" }, h("legend", null, "Tournament type"),
+      opt("draft", "Draft", "Teams are drafted fresh each time. Stats follow each player."),
+      opt("team", "Team", "The same teams play each time. Teams keep their record and players across tournaments."));
+  }
+
   function tournamentFormFields(t = {}) {
     return [
       field("Name", input("name", { required: true, value: t.name || "", placeholder: "Fall Classic" }), "wide"),
       field("Season", input("season", { value: t.season || "" })),
-      field("Format", select("format", [["draft", "Draft (new teams each time)"], ["team", "Teams (same teams carry over)"]], t.format || "draft"),
-        "wide"),
+      typeChooser(t.format || "draft"),
       field("Location", input("location", { value: t.location || "" })),
       field("Start date", input("start_date", { type: "date", value: t.start_date || "" })),
       field("End date", input("end_date", { type: "date", value: t.end_date || "" })),
@@ -182,21 +198,33 @@
   }
 
   function newTournamentForm() {
-    const namesArea = h("textarea", { name: "team_names_text", placeholder: "Optional: one team name per line (blank = Team 1, Team 2, …)", style: { minHeight: "90px" } });
+    // One name box per team; typed names are kept when the count changes.
+    const typed = [];
+    const namesBox = h("div", { class: "team-name-lines" });
+    const drawNames = (n) => {
+      for (const [i, el] of [...namesBox.querySelectorAll("input")].entries()) typed[i] = el.value;
+      mount(namesBox, range(1, n).map((i) => h("label", { class: "team-line" },
+        h("span", { class: "team-line-no" }, `${i}`),
+        h("input", { "data-team-name": "1", value: typed[i - 1] || "", placeholder: `Team ${i}`, maxlength: 80, "aria-label": `Team ${i} name` }))));
+    };
+    const count = select("num_teams", range(2, 32), 4, { "data-num": 1, onchange: (e) => drawNames(Number(e.target.value)) });
+    drawNames(4);
     return h("div", { class: "card" }, h("h2", null, "New tournament"),
       h("form", { class: "form", onsubmit: async (e) => {
         e.preventDefault();
         const v = values(e.target);
-        const team_names = (v.team_names_text || "").split("\n").map((x) => x.trim()).filter(Boolean);
-        delete v.team_names_text;
+        // Blank lines keep their place ("Team 3"), so names line up with their slot.
+        const lines = [...namesBox.querySelectorAll("input")].map((el) => el.value.trim());
+        const last = lines.reduce((a, x, i) => (x ? i : a), -1);
+        const team_names = lines.slice(0, last + 1).map((x, i) => x || `Team ${i + 1}`);
         const t = await run(() => api("POST", "/tournaments", { ...v, team_names }), "Tournament created");
         selectedTid = t.id;
         history.replaceState(null, "", `#tournaments/${t.id}`);
         tournamentsView();
       } },
         ...tournamentFormFields(),
-        field("Number of teams", select("num_teams", range(2, 32), 4, { "data-num": 1 })),
-        field("Team names", namesArea, "wide"),
+        field("Number of teams", count),
+        h("div", { class: "wide" }, h("div", { class: "field-label" }, "Team names ", h("span", { class: "muted small" }, "(leave blank for Team 1, Team 2, …)")), namesBox),
         h("div", { class: "wide" }, h("button", { class: "primary" }, "Create tournament"))));
   }
 
@@ -417,6 +445,10 @@
           { key: "score", label: "Score", sort: false, fmt: (g) => (g.status === "scheduled" ? "" : `${g.away_score}–${g.home_score}`) },
           { key: "actions", label: "", sort: false, fmt: (g) => h("div", { class: "row", style: { justifyContent: "flex-end" } },
             h("a", { class: "btn sm", href: `/scorekeeper?game=${g.id}` }, "Score"),
+            h("button", { class: "sm", onclick: async () => {
+              const saved = await BLST.officialsEditor(g.id);
+              if (saved) toast(saved.length ? `Officials saved: ${BLST.officialsText(saved)}` : "Officials cleared");
+            } }, "Officials"),
             h("a", { class: "btn sm", href: `/game?id=${g.id}`, target: "_blank" }, "View"),
             h("button", { class: "sm", onclick: async () => {
               const v = await formSheet(`${g.away_team} @ ${g.home_team}`, [
@@ -972,7 +1004,11 @@
   }
 
   async function importHistoryView(view) {
-    const area = h("textarea", { placeholder: "name,season,team,gp,g,a,pim,+/-\nSam Sniper,2025,Wolves,10,8,6,4,5" });
+    const tlist = await get("/tournaments");
+    const target = select("hi-target", [["", "Use the event + season columns (creates the tournament if needed)"], ["none", "Don't link rows to a tournament (career totals only)"],
+      ...tlist.map((t) => [t.id, `All rows belong to: ${t.name}${t.season ? ` (${t.season})` : ""}`])], "");
+    const fmt = select("hi-format", [["draft", "Draft (stats follow players)"], ["team", "Team (teams carry over)"]], "draft");
+    const area = h("textarea", { placeholder: "name,season,event,team,gp,g,a,pim,+/-\nSam Sniper,2025,Fall Classic,Wolves,10,8,6,4,5" });
     const report = h("div");
     const batches = h("div");
     const source = h("input", { placeholder: "e.g. 2025 league site", value: "" });
@@ -989,7 +1025,9 @@
       ], list, { sortKey: "imported_at" }));
     };
     const go = async (dry) => {
-      const body = importPayload(area.value, { dry_run: dry, source: source.value || undefined, skip_errors: $("#hi-skip").checked, create_missing_players: $("#hi-create").checked, club_teams: $("#hi-clubs").checked });
+      const body = importPayload(area.value, { dry_run: dry, source: source.value || undefined, skip_errors: $("#hi-skip").checked, create_missing_players: $("#hi-create").checked,
+        format: fmt.value, club_teams: fmt.value === "team",
+        tournament_id: /^\d+$/.test(target.value) ? Number(target.value) : undefined, link_tournaments: target.value !== "none" });
       try {
         mount(report, importReport(await api("POST", "/import/historical", body)));
         if (!dry) loadBatches();
@@ -1001,14 +1039,15 @@
     mount(view,
       h("div", { class: "card" }, h("h2", null, "Import historical stats"),
         h("p", { class: "muted small" },
-          "One row per player per season/event. Recognised columns (case-insensitive, common abbreviations OK): name or first_name/last_name, email, external_id, season, event, team, position, GP, G, A, PIM, +/-, PPG, PPA, SHG, SHA, GWG, SOG, HITS, BLK, FOW, FOL; goalies: GP (or GPI), W, L, OTL, T, SA, GA, SV, SO, MIN (minutes or mm:ss). Imported lines are added to career totals, never to live tournament stats."),
+          "One row per player per season/event. Recognised columns (case-insensitive, common abbreviations OK): name or first_name/last_name, email, external_id, season, event, team, position, GP, G, A, PIM, +/-, PPG, PPA, SHG, SHA, GWG, SOG, HITS, BLK, FOW, FOL; goalies: GP (or GPI), W, L, OTL, T, SA, GA, SV, SO, MIN (minutes or mm:ss)."),
         h("div", { class: "row", style: { marginBottom: "8px" } }, fileLoader(area), field("Source label", source)),
         area,
         h("div", { class: "row" },
           h("label", { class: "inline" }, h("input", { type: "checkbox", id: "hi-create", checked: true }), "Create players that don't exist"),
           h("label", { class: "inline" }, h("input", { type: "checkbox", id: "hi-skip" }), "Skip bad rows"),
-          h("label", { class: "inline" }, h("input", { type: "checkbox", id: "hi-clubs" }), "Team tournaments: these teams carry over")),
-        h("p", { class: "muted small" }, "Players are matched by registration or player code, email, then name. No emails in the file? That's fine: match them to registered players later under Match players."),
+          ),
+        h("div", { class: "form", style: { marginTop: "8px" } }, field("Tournament", target, "wide"), field("Tournament type (for tournaments this import creates)", fmt, "wide")),
+        h("p", { class: "muted small" }, "Each row is kept with its tournament (its own stats page) and also adds to the player's all-time totals and, for team tournaments, the team's history. Players are matched by registration or player code, email, then name. No emails in the file? That's fine: match them to registered players later under Match players."),
         h("div", { class: "row", style: { marginTop: "10px" } }, h("button", { onclick: () => go(true) }, "Dry run"), h("button", { class: "primary", onclick: () => go(false) }, "Import")),
         report),
       h("div", { class: "card" }, h("h2", null, "Previous imports"), batches));

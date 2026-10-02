@@ -153,4 +153,35 @@ router.post("/games/:id/events/:eventId/restore", scorekeeper, async (req, res) 
   res.json(await control.voidEvent(intParam(req.params.id), intParam(req.params.eventId, "eventId"), false));
 });
 
+// ---------------------------------------------------------------------------
+// Officials of record: referees, linespersons, scorekeepers, timekeepers.
+
+const OFFICIAL_ROLES = ["referee", "linesperson", "scorekeeper", "timekeeper"];
+
+router.get("/games/:id/officials", async (req, res) => {
+  await data.getGame(intParam(req.params.id));
+  res.json(await db.many("SELECT role, name FROM game_officials WHERE game_id = $1 ORDER BY position, id", [intParam(req.params.id)]));
+});
+
+/** Replaces the game's officials: { officials: [{ role, name }] } (any number of each role). */
+router.put("/games/:id/officials", scorekeeper, async (req, res) => {
+  const id = intParam(req.params.id);
+  const list = req.body.officials;
+  if (!Array.isArray(list) || list.length > 20) throw badRequest("officials must be a list (at most 20)");
+  const clean = list.map((o, i) => {
+    const role = OFFICIAL_ROLES.includes(o && o.role) ? o.role : null;
+    if (!role) throw badRequest(`officials[${i}].role must be one of ${OFFICIAL_ROLES.join(", ")}`);
+    const name = typeof o.name === "string" ? o.name.trim().slice(0, 80) : "";
+    return { role, name };
+  }).filter((o) => o.name);
+  await db.tx(async (c) => {
+    await c.query("DELETE FROM game_officials WHERE game_id = $1", [id]);
+    for (const [i, o] of clean.entries()) {
+      await c.query("INSERT INTO game_officials (game_id, role, name, position) VALUES ($1, $2, $3, $4)", [id, o.role, o.name, i]);
+    }
+  });
+  await require("../services/gameControl").publish(id, "officials");
+  res.json(clean);
+});
+
 module.exports = router;

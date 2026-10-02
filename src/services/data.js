@@ -21,7 +21,7 @@ async function getGame(id, client = db) {
 /** Everything needed to compute one game's state. */
 async function loadGameBundle(gameId) {
   const game = await getGame(gameId);
-  const [tournament, teams, roster, events, venueStream] = await Promise.all([
+  const [tournament, teams, roster, events, venueStream, officials] = await Promise.all([
     getTournament(game.tournament_id),
     db.many("SELECT * FROM teams WHERE id = ANY($1)", [[game.home_team_id, game.away_team_id]]),
     loadGameRoster(game),
@@ -29,8 +29,9 @@ async function loadGameBundle(gameId) {
     game.venue
       ? db.one("SELECT * FROM venue_streams WHERE tournament_id = $1 AND lower(venue) = lower($2)", [game.tournament_id, game.venue])
       : null,
+    db.many("SELECT role, name FROM game_officials WHERE game_id = $1 ORDER BY position, id", [gameId]),
   ]);
-  return { tournament, game, teams, roster, events, stream: resolveStream(game, venueStream) };
+  return { tournament, game, teams, roster, events, officials, stream: resolveStream(game, venueStream) };
 }
 
 /**
@@ -69,7 +70,7 @@ function teamPublic(team) {
 
 /** Public live state of a game, pushed to viewers over SSE. */
 function buildSnapshot(bundle, now = Date.now()) {
-  const { tournament: t, game, teams, roster, events, stream = null } = bundle;
+  const { tournament: t, game, teams, roster, events, stream = null, officials = [] } = bundle;
   const stats = computeGameStats({ tournament: t, game, roster, events, now });
   const byId = new Map(roster.map((r) => [r.player_id, r]));
   const who = (id) => (id == null ? null : { id, name: playerLabel(byId.get(id)) || `Player ${id}`, number: byId.get(id)?.jersey_number ?? null });
@@ -118,6 +119,7 @@ function buildSnapshot(bundle, now = Date.now()) {
     home: side(game.home_team_id),
     away: side(game.away_team_id),
     stream,
+    officials,
     active_penalties: stats.penalties.active.map((p) => ({
       event_id: p.event_id,
       team_id: p.team_id,
@@ -244,7 +246,9 @@ async function computeTournamentStats(tournamentId) {
   const gameStats = started.map((game) =>
     computeGameStats({ tournament, game, roster: rosterBy.get(game.id) || [], events: eventsBy.get(game.id) || [], now }),
   );
-  const totals = aggregatePlayerStats(gameStats);
+  // Imported lines that belong to this tournament count as part of it.
+  const imported = await db.many("SELECT * FROM historical_stats WHERE tournament_id = $1", [tournamentId]);
+  const totals = aggregatePlayerStats(imported.length ? [...gameStats, importedAsGame(imported)] : gameStats);
   const standings = computeStandings(tournament, teams, games, gameStats);
 
   const playerIds = [...new Set([...totals.skaters, ...totals.goalies].map((l) => l.player_id))];
@@ -287,12 +291,36 @@ async function computeTournamentStats(tournamentId) {
   };
 }
 
+/** Imported stat lines in the shape of one game's per-player lines. */
+function importedAsGame(rows) {
+  const skaters = [];
+  const goalies = [];
+  for (const h of rows) {
+    const team_id = h.team_id ?? 0;
+    if (h.gp || h.goals || h.assists || h.pim) {
+      skaters.push({
+        player_id: h.player_id, team_id, gp: h.gp, goals: h.goals, assists: h.assists, points: h.goals + h.assists,
+        plus_minus: h.plus_minus, pim: h.pim, ppg: h.ppg, ppa: h.ppa, shg: h.shg, sha: h.sha, gwg: h.gwg, shots: h.shots,
+        hits: h.hits, blocks: h.blocks, fow: h.fow, fol: h.fol, imported: true,
+      });
+    }
+    if (h.goalie_gp) {
+      goalies.push({
+        player_id: h.player_id, team_id, gp: h.goalie_gp, toi_sec: h.toi_sec, shots_against: h.shots_against, goals_against: h.goals_against,
+        saves: h.shots_against - h.goals_against, wins: h.wins, losses: h.losses, ot_losses: h.ot_losses, ties: h.ties, shutouts: h.shutouts,
+      });
+    }
+  }
+  return { skaters, goalies };
+}
+
 /** Career line for one player: imported history + every tournament played. */
 async function playerCareer(playerId) {
   const player = await db.one(`SELECT ${PUBLIC_PLAYER_COLS} FROM players p WHERE p.id = $1`, [playerId]);
   if (!player) throw notFound("player");
   const [history, tournaments, rosters] = await Promise.all([
-    db.many("SELECT * FROM historical_stats WHERE player_id = $1 ORDER BY season NULLS FIRST, id", [playerId]),
+    // Lines kept with a tournament are counted through that tournament below.
+    db.many("SELECT * FROM historical_stats WHERE player_id = $1 AND tournament_id IS NULL ORDER BY season NULLS FIRST, id", [playerId]),
     db.many(
       `SELECT DISTINCT t.id, t.name, t.season, t.start_date FROM tournaments t
          JOIN games g ON g.tournament_id = t.id
@@ -300,12 +328,20 @@ async function playerCareer(playerId) {
         UNION
        SELECT t.id, t.name, t.season, t.start_date FROM tournaments t
          JOIN roster_entries re ON re.tournament_id = t.id AND re.player_id = $1
-        ORDER BY start_date NULLS LAST, id`,
+        UNION
+       SELECT t.id, t.name, t.season, t.start_date FROM tournaments t
+         JOIN historical_stats h ON h.tournament_id = t.id AND h.player_id = $1
+        ORDER BY start_date NULLS LAST, season NULLS FIRST, id`,
       [playerId],
     ),
     db.many(
       `SELECT re.tournament_id, re.team_id, re.jersey_number, re.position, re.role, tm.name AS team_name
-         FROM roster_entries re JOIN teams tm ON tm.id = re.team_id WHERE re.player_id = $1`,
+         FROM roster_entries re JOIN teams tm ON tm.id = re.team_id WHERE re.player_id = $1
+        UNION ALL
+       SELECT DISTINCT ON (h.tournament_id) h.tournament_id, h.team_id, NULL, NULL, NULL, coalesce(tm.name, h.team_name)
+         FROM historical_stats h LEFT JOIN teams tm ON tm.id = h.team_id
+        WHERE h.player_id = $1 AND h.tournament_id IS NOT NULL
+          AND NOT EXISTS (SELECT 1 FROM roster_entries r WHERE r.player_id = $1 AND r.tournament_id = h.tournament_id)`,
       [playerId],
     ),
   ]);

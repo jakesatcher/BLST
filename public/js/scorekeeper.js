@@ -83,9 +83,10 @@
   const teamsRow = h("div", { class: "grid two" });
   const logCard = h("div", { class: "card" });
   const lineupCard = h("div", { class: "card" });
+  const officialsCard = h("div", { class: "card" });
   let pill = h("span");
 
-  mount(app, clockCard, teamsRow, logCard, lineupCard);
+  mount(app, clockCard, teamsRow, logCard, lineupCard, officialsCard);
   BLST.keepAwake();
 
   const side = (which) => (which === "home" ? snap.home : snap.away);
@@ -520,6 +521,12 @@
                 onchange: (ev) => quiet(act("PATCH", "/lineup", { player_id: p.player_id, dressed: ev.target.checked })) }), "Dressed")))))),
         snap.game.status === "scheduled" ? h("p", { class: "muted small" }, "The lineup is copied from the team roster when the game starts.") : [search, results]);
     };
+    mount(officialsCard, h("div", { class: "row between" },
+      h("div", null, h("strong", null, "Officials "), h("span", { class: "small muted" }, BLST.officialsText(snap.officials) || "none recorded")),
+      h("button", { class: "sm", onclick: async () => {
+        const saved = await BLST.officialsEditor(gameId, snap.officials);
+        if (saved) toast("Officials saved");
+      } }, snap.officials && snap.officials.length ? "Edit officials" : "Add officials")));
     mount(lineupCard, h("details", null, h("summary", null, h("strong", null, "Lineups")), h("div", { class: "grid two", style: { marginTop: "12px" } }, block("away"), block("home"))));
   }
 

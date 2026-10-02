@@ -171,7 +171,17 @@ router.get("/tournaments/:id/teams", async (req, res) => {
       WHERE re.tournament_id = $1 ORDER BY re.jersey_number NULLS LAST, p.last_name`,
     [id],
   );
-  res.json(teams.map((t) => ({ ...t, roster: roster.filter((r) => r.team_id === t.id) })));
+  // Imported tournaments have no roster entries: their players come from the imported lines.
+  const imported = await db.many(
+    `SELECT DISTINCT ON (h.team_id, p.id) NULL::int AS roster_entry_id, h.team_id, NULL::int AS jersey_number, p.position, NULL AS role,
+            NULL::int AS draft_round, NULL::int AS draft_pick, ${data.PUBLIC_PLAYER_COLS}
+       FROM historical_stats h JOIN players p ON p.id = h.player_id
+      WHERE h.tournament_id = $1 AND h.team_id IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM roster_entries re WHERE re.tournament_id = $1 AND re.player_id = p.id)`,
+    [id],
+  );
+  const all = [...roster, ...imported];
+  res.json(teams.map((t) => ({ ...t, roster: all.filter((r) => r.team_id === t.id) })));
 });
 
 router.post("/tournaments/:id/teams", admin, async (req, res) => {

@@ -10,7 +10,8 @@
   const board = h("div", { class: "board" });
   const detail = h("div");
   const tabBar = tabs([["summary", "Summary"], ["box", "Box score"], ["lineups", "Lineups"], ["feed", "Play by play"]], () => renderDetail(), "summary");
-  mount(app, h("div", { class: "row between small muted", style: { marginBottom: "8px" } }, h("a", { id: "tlink", href: "/" }, "← Tournament"), h("span", { class: "row" }, h("a", { id: "watchlink", class: "btn primary sm", href: `/watch?game=${id}` }, "▶ Watch with live overlay"), h("a", { href: `/api/v1/export/games/${id}` }, "Game JSON"))), board, tabBar.el, detail);
+  const officialsLine = h("p", { class: "small muted officials-line" });
+  mount(app, h("div", { class: "row between small muted", style: { marginBottom: "8px" } }, h("a", { id: "tlink", href: "/" }, "← Tournament"), h("span", { class: "row" }, h("a", { id: "watchlink", class: "btn primary sm", href: `/watch?game=${id}` }, "▶ Watch with live overlay"), h("a", { href: `/api/v1/export/games/${id}` }, "Game JSON"))), board, officialsLine, tabBar.el, detail);
 
   const sideOf = (teamId) => (teamId === snap.home.id ? snap.home : snap.away);
   const absNow = () => snap.game.period_start_abs + (snap.game.period_length_sec - remaining() / 1000);
@@ -145,6 +146,7 @@
     $("#watchlink").textContent = s.stream ? (s.stream.embed_url ? "▶ Watch live" : "▶ Watch on LiveBarn + live overlay") : "Live scorebug overlay";
     renderBoard();
     renderDetail();
+    mount(officialsLine, s.officials && s.officials.length ? BLST.officialsText(s.officials) : "");
   }
 
   stream({ game_id: id }, { snapshot: apply });
