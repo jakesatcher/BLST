@@ -125,18 +125,21 @@ allows outbound SMTP only on Pro plans and above).
 
 On a Pro plan any SMTP service also works: `SMTP_URL='smtps://USER:PASS@smtp.example.com:465'`.
 
-**Texts: Twilio.**
-1. Create a Twilio account and buy a phone number with SMS.
-2. US numbers need **A2P 10DLC** registration (brand + campaign) before texts
-   are delivered; a **toll-free** number needs toll-free verification instead.
-   Approval takes days, so start early. Trial accounts only text numbers you've
-   verified in Twilio.
-3. Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and `TWILIO_FROM_NUMBER`
-   (`+1...`), or `TWILIO_MESSAGING_SERVICE_SID` instead of the number.
+**Texts: Twilio Verify** (recommended: Twilio sends the codes from its own
+registered numbers, so no A2P 10DLC or toll-free registration).
+1. In the Twilio Console: **Verify → Services → Create new**. Name it
+   `Beer League Stats`, tick **SMS**, and copy the **Service SID** (`VA...`).
+2. Set `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN` and
+   `TWILIO_VERIFY_SERVICE_SID=VA...`.
+
+The start-up log then says `Text messages: Twilio Verify`. Trial accounts
+can only text numbers verified in Twilio; upgrade before real users sign up.
+(Sending from your own number with `TWILIO_FROM_NUMBER` also works, but US
+carriers require A2P 10DLC or toll-free registration for it.)
 
 ```bash
 railway variable set --service blst RESEND_API_KEY=re_... EMAIL_FROM='Beer League Stats <no-reply@beerleaguestats.hockey>'
-railway variable set --service blst TWILIO_ACCOUNT_SID=AC... TWILIO_AUTH_TOKEN=... TWILIO_FROM_NUMBER=+15551234567
+railway variable set --service blst TWILIO_ACCOUNT_SID=AC... TWILIO_AUTH_TOKEN=... TWILIO_VERIFY_SERVICE_SID=VA...
 ```
 
 Without the CLI, write `npx @railway/cli` instead of `railway`, or use the

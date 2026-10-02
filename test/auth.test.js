@@ -340,3 +340,40 @@ test("email can go through Resend's HTTPS API (for hosts that block SMTP)", asyn
     config.email.resendApiKey = "";
   }
 });
+
+test("with Twilio Verify, Twilio sends and checks the text-message code", async () => {
+  const realFetch = global.fetch;
+  const sms = config.sms;
+  const saved = { ...sms };
+  const twilio = [];
+  Object.assign(sms, { twilioSid: "ACtest", twilioToken: "tok", twilioFrom: "", twilioMessagingService: "", twilioVerifyService: "VAtest" });
+  global.fetch = async (url, opts) => {
+    if (!String(url).startsWith("https://verify.twilio.com/")) return realFetch(url, opts);
+    const form = Object.fromEntries(new URLSearchParams(String(opts.body)));
+    twilio.push({ url: String(url), form });
+    if (url.endsWith("/Verifications")) return new Response(JSON.stringify({ status: "pending" }), { status: 201 });
+    return new Response(JSON.stringify({ status: form.Code === "424242" ? "approved" : "pending" }), { status: 200 });
+  };
+  try {
+    const ip = nextIp();
+    const start = await call("POST", "/auth/signup", { body: { email: "verify.user@example.com", phone: "+1 555 404 0101" }, ip });
+    assert.equal(start.status, 202);
+    const step2 = await call("POST", "/auth/verify", { body: { challenge_id: start.body.challenge_id, code: codeFor("verify.user@example.com") }, ip });
+    assert.equal(step2.body.step, "sms");
+    assert.equal(twilio.length, 1, "Twilio Verify was asked to send");
+    assert.match(twilio[0].url, /\/Services\/VAtest\/Verifications$/);
+    assert.deepEqual(twilio[0].form, { To: "+15554040101", Channel: "sms" });
+    assert.ok(!outbox.some((m) => m.to === "+15554040101"), "the app didn't make or log its own code");
+
+    const wrong = await call("POST", "/auth/verify", { body: { challenge_id: start.body.challenge_id, code: "111111" }, ip });
+    assert.equal(wrong.status, 400);
+    const done = await call("POST", "/auth/verify", { body: { challenge_id: start.body.challenge_id, code: "424242" }, ip });
+    assert.equal(done.status, 200, JSON.stringify(done.body));
+    assert.equal(done.body.step, "done");
+    assert.ok(done.body.token);
+    assert.ok(twilio.slice(1).every((c) => /VerificationCheck$/.test(c.url) && c.form.To === "+15554040101"));
+  } finally {
+    global.fetch = realFetch;
+    Object.assign(sms, saved);
+  }
+});

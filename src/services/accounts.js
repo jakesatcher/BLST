@@ -94,6 +94,8 @@ async function deliver(channel, target, code, purpose, ghost) {
     notify.sendEmail(target, `${code} is your BLST code`,
       `Your BLST code is ${code}\n\nEnter it to ${what}. It expires in ${CODE_TTL_MIN} minutes.\n\n` +
       "If you didn't ask for this, ignore this email; nothing changes without the code.").catch(() => {});
+  } else if (code === null) {
+    await notify.startSmsVerification(target);
   } else {
     // The last line lets phones offer the code automatically (WebOTP).
     const host = config.auth.appHost;
@@ -109,7 +111,18 @@ function stepTarget(ch) {
 }
 
 /** Sends the code for the challenge's current step (unless it's a ghost). */
+// Marks an SMS step whose code Twilio Verify generated and will check.
+const VERIFY_MARK = "twilio-verify";
+const usesVerify = (ch) => ch.step === "sms" && !ch.ghost && notify.smsVerifyConfigured();
+
 async function sendStep(ch) {
+  if (usesVerify(ch)) {
+    await db.query(
+      "UPDATE auth_challenges SET code_hash = $2, attempts = 0, sends = sends + 1, last_sent_at = now() WHERE id = $1",
+      [ch.id, VERIFY_MARK],
+    );
+    return deliver("sms", ch.phone, null, ch.purpose, false);
+  }
   const code = newCode();
   await db.query(
     "UPDATE auth_challenges SET code_hash = $2, attempts = 0, sends = sends + 1, last_sent_at = now() WHERE id = $1",
@@ -218,8 +231,10 @@ async function verify(challengeId, rawCode, { accountId, sessionId } = {}) {
     [ch.id, MAX_ATTEMPTS],
   );
   if (!counted) throw new HttpError(410, "Too many wrong codes. Start again.");
-  const ok = !ch.ghost && /^\d{6}$/.test(code) && ch.code_hash &&
-    crypto.timingSafeEqual(Buffer.from(codeHash(ch.id, ch.step, code)), Buffer.from(ch.code_hash));
+  const ok = ch.code_hash === VERIFY_MARK
+    ? ch.step === "sms" && /^\d{4,10}$/.test(code) && (await notify.checkSmsVerification(ch.phone, code))
+    : !ch.ghost && /^\d{6}$/.test(code) && ch.code_hash &&
+      crypto.timingSafeEqual(Buffer.from(codeHash(ch.id, ch.step, code)), Buffer.from(ch.code_hash));
   if (!ok) {
     const left = MAX_ATTEMPTS - counted.attempts;
     throw new HttpError(400, left > 0 ? `That code isn't right. ${left} ${left === 1 ? "try" : "tries"} left.` : "Too many wrong codes. Start again.");

@@ -96,6 +96,10 @@ module.exports = {
     twilioToken: process.env.TWILIO_AUTH_TOKEN || "",
     twilioFrom: process.env.TWILIO_FROM_NUMBER || "",
     twilioMessagingService: process.env.TWILIO_MESSAGING_SERVICE_SID || "",
+    // Twilio Verify (VA...): Twilio sends and checks the code from its own
+    // registered senders, so no A2P 10DLC / toll-free registration is needed.
+    // Takes precedence over TWILIO_FROM_NUMBER for sign-in codes.
+    twilioVerifyService: process.env.TWILIO_VERIFY_SERVICE_SID || "",
   },
   rateLimits: {
     readsPerMinute: Number(process.env.RATE_LIMIT_READS_PER_MIN || 600),
