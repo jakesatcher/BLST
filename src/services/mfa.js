@@ -234,6 +234,7 @@ async function finishPasskeyRegistration(req, acct, response, rawName) {
   try {
     result = await verifyRegistrationResponse({ response, expectedChallenge: pending.challenge, expectedOrigin: origin, expectedRPID: rpID });
   } catch (err) {
+    console.warn(`[auth] passkey registration refused: ${String(err.message).slice(0, 200)} (rp ${rpID}, origin ${origin})`);
     throw badRequest(`That passkey couldn't be added (${String(err.message).slice(0, 120)}).`);
   }
   if (!result.verified || !result.registrationInfo) throw badRequest("That passkey couldn't be verified.");
@@ -266,7 +267,10 @@ async function verifyPasskey(req, accountId, response, expectedChallenge) {
   const { verifyAuthenticationResponse } = require("@simplewebauthn/server");
   if (!response || typeof response.id !== "string" || !expectedChallenge) return false;
   const key = await db.one("SELECT * FROM account_passkeys WHERE id = $1 AND account_id = $2", [response.id, accountId]);
-  if (!key) return false;
+  if (!key) {
+    console.warn("[auth] passkey sign-in: that passkey isn't registered to this account");
+    return false;
+  }
   const { rpID, origin } = relyingParty(req);
   let result;
   try {
@@ -274,7 +278,8 @@ async function verifyPasskey(req, accountId, response, expectedChallenge) {
       response, expectedChallenge, expectedOrigin: origin, expectedRPID: rpID,
       credential: { id: key.id, publicKey: new Uint8Array(key.public_key), counter: Number(key.counter), transports: key.transports },
     });
-  } catch {
+  } catch (err) {
+    console.warn(`[auth] passkey sign-in refused: ${String(err.message).slice(0, 200)} (rp ${rpID}, origin ${origin})`);
     return false;
   }
   if (!result.verified) return false;

@@ -70,7 +70,35 @@
       },
     };
   }
-  const passkeyError = (e) => (e && e.name === "NotAllowedError" ? new Error("The passkey request was cancelled or timed out.") : e);
+  /** Plain-language reasons for WebAuthn failures (the browser's own text is vague). */
+  function passkeyError(e) {
+    const name = e && e.name;
+    if (name === "NotAllowedError") return new Error("No passkey was used. The prompt was closed, timed out, or this device has no passkey for this account. Try again, or use \"Use a phone or other device\" in the prompt.");
+    if (name === "InvalidStateError") return new Error("This device already has a passkey for your account.");
+    if (name === "SecurityError") return new Error("Passkeys can't be used on this address. Open the site at its normal https:// address and try again.");
+    if (name === "NotSupportedError") return new Error("This browser or device doesn't support passkeys. Use an authenticator app instead.");
+    if (name === "AbortError") return new Error("The passkey prompt was interrupted. Try again.");
+    return e;
+  }
+
+  /**
+   * Fetches WebAuthn options ahead of the tap, so the browser prompt opens
+   * straight from the tap (Safari and iOS refuse prompts that start after a
+   * network wait). Options are refreshed if they're older than 4 minutes.
+   */
+  function prefetched(load) {
+    let p = null;
+    let at = 0;
+    const fresh = () => {
+      if (!p || Date.now() - at > 4 * 60e3) {
+        at = Date.now();
+        p = load();
+        p.catch(() => { p = null; });
+      }
+      return p;
+    };
+    return { warm: () => { fresh().catch(() => {}); }, take: () => { const x = fresh(); p = null; return x; } };
+  }
 
   // -------------------------------------------------------------------------
   // Sign in / sign up / admin setup
@@ -153,11 +181,12 @@
 
     function mfaStep(state, { backup = false } = {}) {
       const methods = state.methods || {};
+      const pk = prefetched(() => api("POST", "/auth/passkey-options", { challenge_id: state.challenge_id }));
+      if (methods.passkey && passkeysSupported()) pk.warm();
       const usePasskey = async () => {
         showErr(null);
         try {
-          const options = await api("POST", "/auth/passkey-options", { challenge_id: state.challenge_id });
-          const passkey = await getPasskey(options);
+          const passkey = await getPasskey(await pk.take());
           finish(await api("POST", "/auth/verify", { challenge_id: state.challenge_id, passkey }));
         } catch (e) {
           showErr(passkeyError(e));
@@ -190,8 +219,7 @@
           backup ? "Use the app or a passkey instead" : "Use a backup code") : h("span"),
         h("button", { type: "button", class: "link", onclick: details }, "Start over")));
       mount(box, form);
-      if (methods.passkey && passkeysSupported() && !methods.totp && !backup) usePasskey();
-      else if (methods.totp || backup) input.focus();
+      if (methods.totp || backup) input.focus();
     }
 
     details();
@@ -231,7 +259,9 @@
     const [err, showErr] = errorBox();
     const done = (r) => (r && r.backup_codes ? showBackupCodes(box, r.backup_codes, onDone) : onDone());
 
+    const reg = prefetched(() => api("POST", "/account/mfa/passkeys/options"));
     function choose() {
+      if (passkeysSupported()) reg.warm();
       mount(box, h("div", { class: "stack signin" },
         h("h2", null, "Add a second step to sign-in"),
         required ? h("p", null, "Your account can run games or change settings, so it needs more than an emailed code. Set up one of these to continue:") : h("p", null, "Choose how you'll confirm it's you after the emailed code:"),
@@ -245,14 +275,14 @@
     async function passkey() {
       showErr(null);
       try {
-        const options = await api("POST", "/account/mfa/passkeys/options");
-        const response = await createPasskey(options);
+        const response = await createPasskey(await reg.take());
         const name = /iPhone|iPad|Mac/.test(navigator.userAgent) ? "Apple device" : /Android/.test(navigator.userAgent) ? "Android phone" : /Windows/.test(navigator.userAgent) ? "Windows computer" : "Passkey";
         const r = await api("POST", "/account/mfa/passkeys", { response, name });
         toast("Passkey added");
         done(r);
       } catch (e) {
         showErr(passkeyError(e));
+        reg.warm(); // a fresh challenge for the next try
       }
     }
 
