@@ -22,6 +22,16 @@ router.post("/import/historical", admin, async (req, res) => {
   res.status(report.committed || report.dry_run ? 200 : 422).json(report);
 });
 
+/** What an upload's Tournament ID (city + type + year) points at, before uploading. */
+router.get("/import/tournament-id", admin, async (req, res) => {
+  const target = await importer.uploadTarget({ city: req.query.city, series: req.query.series, year: req.query.year });
+  const t = target.existing;
+  const stats = t ? await db.one(
+    `SELECT (SELECT count(*) FROM historical_stats WHERE tournament_id = $1)::int AS rows,
+            (SELECT count(*) FROM games WHERE tournament_id = $1 AND status <> 'scheduled')::int AS games`, [t.id]) : null;
+  res.json({ code: target.code, tournament: t ? { id: t.id, name: t.name, imported: t.imported, uploaded_rows: stats.rows, scored_games: stats.games } : null });
+});
+
 router.post("/import/roster/:tournamentId", admin, async (req, res) => {
   const report = await importer.importRoster(intParam(req.params.tournamentId, "tournamentId"), req.body);
   res.status(report.committed || report.dry_run ? 200 : 422).json(report);
@@ -30,19 +40,23 @@ router.post("/import/roster/:tournamentId", admin, async (req, res) => {
 router.get("/import/batches", admin, async (_req, res) => {
   res.json(
     await db.many(
-      `SELECT import_batch, source, count(*) AS rows, min(created_at) AS imported_at
-         FROM historical_stats GROUP BY import_batch, source ORDER BY min(created_at) DESC`,
+      `SELECT h.import_batch, h.source, count(*) AS rows, min(h.created_at) AS imported_at,
+              string_agg(DISTINCT coalesce(t.code, t.name), ', ') AS tournament
+         FROM historical_stats h LEFT JOIN tournaments t ON t.id = h.tournament_id
+        GROUP BY h.import_batch, h.source ORDER BY min(h.created_at) DESC`,
     ),
   );
 });
 
 router.delete("/import/batches/:batch", admin, async (req, res) => {
+  const touched = (await db.many("SELECT DISTINCT tournament_id FROM historical_stats WHERE import_batch = $1 AND tournament_id IS NOT NULL", [req.params.batch])).map((x) => x.tournament_id);
   const r = await db.query("DELETE FROM historical_stats WHERE import_batch = $1", [req.params.batch]);
-  // Tournaments this import created (and nothing has been played in since) go too.
+  // Imported tournaments left with no stats (and never played in BLST) go too.
   await db.query(
-    `DELETE FROM tournaments t WHERE t.imported AND t.import_batch = $1
+    `DELETE FROM tournaments t WHERE t.imported AND (t.import_batch = $1 OR t.id = ANY($2))
         AND NOT EXISTS (SELECT 1 FROM games g WHERE g.tournament_id = t.id)
-        AND NOT EXISTS (SELECT 1 FROM historical_stats h WHERE h.tournament_id = t.id)`, [req.params.batch]);
+        AND NOT EXISTS (SELECT 1 FROM historical_stats h WHERE h.tournament_id = t.id)`, [req.params.batch, touched]);
+  require("../lib/bus").emitDomain("history.deleted", { batch: req.params.batch });
   if (!r.rowCount) throw notFound("import batch");
   res.json({ deleted: r.rowCount });
 });

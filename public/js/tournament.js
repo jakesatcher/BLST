@@ -19,7 +19,7 @@
     app,
     h("div", { class: "row between" },
       h("div", { class: "title-row" }, t.logo_version ? h("img", { class: "logo lg", src: BLST.logoUrl("tournaments", t.id, t.logo_version), alt: "" }) : "",
-        h("div", null, h("h1", null, t.name), h("div", { class: "muted" }, [t.season, t.location, `${t.teams.length} teams`].filter(Boolean).join(" · ")))),
+        h("div", null, h("h1", null, t.name), h("div", { class: "muted" }, [t.code, t.season, t.location, `${t.teams.length} teams`].filter(Boolean).join(" · ")))),
       h("div", { class: "row" },
         h("a", { class: "btn", href: `/api/v1/export/tournaments/${id}/skaters?format=csv` }, "Skaters CSV"),
         h("a", { class: "btn", href: `/api/v1/export/tournaments/${id}` }, "JSON"))),

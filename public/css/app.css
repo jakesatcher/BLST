@@ -496,3 +496,4 @@ button.link { background: none; border: 0; padding: 6px 0; color: var(--accent);
 .team-line-no { width: 1.6em; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
 .officials-row { display: grid; grid-template-columns: 9.5em 1fr auto; gap: 8px; align-items: center; }
 @media (max-width: 420px) { .officials-row { grid-template-columns: 1fr auto; } .officials-row select { grid-column: 1 / -1; } }
+.bad-text { color: var(--danger); }

@@ -186,4 +186,14 @@ router.delete("/admin/invites/:email", requireInteractiveAdmin, async (req, res)
   res.status(204).end();
 });
 
+/** The organization's tournament types (event series), e.g. DEX, Bash, Outlaw. Part of each Tournament ID. */
+router.put("/admin/tournament-types", requireInteractiveAdmin, async (req, res) => {
+  const list = req.body.types;
+  if (!Array.isArray(list) || list.length > 30) throw badRequest("types must be a list (at most 30)");
+  const types = [...new Set(list.map((x) => String(x || "").trim().slice(0, 30)).filter((x) => /[A-Za-z0-9]/.test(x)))];
+  await db.query("UPDATE organizations SET tournament_types = $2, updated_at = now() WHERE id = $1", [req.org.id, types]);
+  require("../middleware/org").invalidateOrgCache();
+  res.json({ types });
+});
+
 module.exports = router;

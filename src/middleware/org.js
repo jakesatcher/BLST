@@ -22,7 +22,7 @@ function invalidateOrgCache() {
 async function findOrg(slug) {
   const hit = cache.get(slug);
   if (hit && hit.at > Date.now() - CACHE_MS) return hit.org;
-  const org = await db.one("SELECT id, slug, name, status, factions_enabled FROM organizations WHERE slug = $1", [slug]);
+  const org = await db.one("SELECT id, slug, name, status, factions_enabled, tournament_types FROM organizations WHERE slug = $1", [slug]);
   cache.set(slug, { org, at: Date.now() });
   return org;
 }

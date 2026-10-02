@@ -52,7 +52,7 @@ test("draft tournaments: a player's stats follow them from team to team, plus im
   await tournament("Draft Cup 2025", { teams: ["Red", "Blue"], rosters: { Red: [S.ann, S.cy], Blue: [S.bo, S.di] }, goals: [S.ann, S.ann, S.bo] });
   await tournament("Draft Cup 2026", { teams: ["Green", "Gold"], rosters: { Green: [S.bo, S.di], Gold: [S.ann, S.cy] }, goals: [S.ann, S.di, S.ann] });
   // Older seasons from a spreadsheet.
-  const imp = await api("POST", "/import/historical", { csv: "first_name,last_name,season,event_name,team_name,gp,goals,assists\nAnn,Draft,2023,Spring Draft,Orange,6,4,5\n" });
+  const imp = await api("POST", "/import/historical", { city: "Akron", series: "DEX", year: 2023, csv: "first_name,last_name,team_name,gp,goals,assists\nAnn,Draft,Orange,6,4,5\n" });
   assert.equal(imp.status, 200, JSON.stringify(imp.body));
 
   const dir = (await api("GET", "/history/players?q=draft")).body;
@@ -76,7 +76,7 @@ test("team tournaments: teams carry over, with their record and their players' s
   S.gus = await player("Gus", "Bear", "gus@example.com");
   // A history file from before BLST, with team names.
   const imp = await api("POST", "/import/historical", {
-    club_teams: true,
+    club_teams: true, city: "Erie", series: "Bash", year: 2024,
     csv: "first_name,last_name,season,event_name,team_name,gp,goals,assists\nEve,Wolf,2024,Summer League,Timber Wolves,10,7,3\nOld,Timer,2024,Summer League,Timber Wolves,10,1,1\n",
   });
   assert.equal(imp.status, 200, JSON.stringify(imp.body));
@@ -93,7 +93,7 @@ test("team tournaments: teams carry over, with their record and their players' s
   const other = clubs.find((c) => c.name === "Timber-Wolves");
   const merged = (await api("POST", `/clubs/${wolves.id}/merge`, { from_club_id: other.id })).body;
   assert.equal(merged.seasons.filter((s) => s.kind === "tournament" && !s.imported).length, 2);
-  assert.ok(merged.seasons.some((s) => s.imported && s.season === "2024" && s.tournament === "Summer League"), "imported season shows too");
+  assert.ok(merged.seasons.some((s) => s.imported && s.season === "2024" && s.tournament === "Erie Bash 2024"), "imported season shows too");
 
   const w = merged.players;
   const eve = w.find((p) => p.player_id === S.eve);
@@ -126,6 +126,7 @@ test("team tournaments: teams carry over, with their record and their players' s
 test("imported players without email are matched to registered players", async () => {
   // History file: names only.
   const imp = await api("POST", "/import/historical", {
+    city: "Troy", series: "Outlaw", year: 2022,
     csv: "first_name,last_name,season,team_name,gp,goals,assists\nMike,Hart,2022,Red,8,6,2\nSam,Lowe,2022,Blue,8,1,1\nJ,Quinn,2022,Blue,8,2,0\n",
   });
   assert.equal(imp.status, 200);
@@ -184,50 +185,74 @@ test("emails can be attached to imported players in bulk", async () => {
   assert.equal((await api("POST", "/admin/identity/emails", { csv }, null)).status, 401);
 });
 
-test("an imported stats file keeps its tournament: its own stats page, counted once in all-time totals", async () => {
+test("an upload names its tournament (city, type, year): its own stats page, counted once, never twice", async () => {
   const csv = [
-    "first_name,last_name,email,season,event,team,position,gp,g,a,pim",
-    "Zed,Imported,zed@example.com,2021,Winter Classic,Hawks,C,4,5,2,2",
-    "Yul,Imported,,2021,Winter Classic,Hawks,D,4,1,3,4",
-    "Xia,Imported,,2021,Winter Classic,Owls,LW,4,2,2,0",
-    "Wes,Goalie,,2021,Winter Classic,Owls,G,4,0,0,0",
+    "first_name,last_name,email,team,position,gp,g,a,pim",
+    "Zed,Imported,zed@example.com,Hawks,C,4,5,2,2",
+    "Yul,Imported,,Hawks,D,4,1,3,4",
+    "Xia,Imported,,Owls,LW,4,2,2,0",
+    "Wes,Goalie,,Owls,G,4,0,0,0",
   ].join("\n");
-  const dry = (await api("POST", "/import/historical", { csv, dry_run: true })).body;
-  assert.deepEqual(dry.tournaments.map((t) => [t.name, t.created]), [["Winter Classic", true]]);
-  assert.equal((await db.many("SELECT 1 FROM tournaments WHERE name = 'Winter Classic'")).length, 0, "dry run creates nothing");
-  const r = (await api("POST", "/import/historical", { csv })).body;
+  const id = { city: "Buffalo", series: "dex", year: 2021 };
+  // The Tournament ID is required, and the type must be one of the organization's.
+  assert.equal((await api("POST", "/import/historical", { csv })).status, 400);
+  assert.equal((await api("POST", "/import/historical", { csv, ...id, city: "" })).status, 400);
+  assert.match((await api("POST", "/import/historical", { csv, ...id, series: "Classic" })).body.error, /DEX, Bash, Outlaw/);
+  assert.equal((await api("POST", "/import/historical", { csv, ...id, year: 21 })).status, 400);
+
+  const dry = (await api("POST", "/import/historical", { csv, ...id, dry_run: true })).body;
+  assert.equal(dry.tournament.code, "BUFFALO-DEX-2021");
+  assert.equal(dry.tournament.created, true);
+  assert.equal((await db.many("SELECT 1 FROM tournaments WHERE code = 'BUFFALO-DEX-2021'")).length, 0, "dry run creates nothing");
+  const r = (await api("POST", "/import/historical", { csv, ...id })).body;
   assert.equal(r.committed, true, JSON.stringify(r));
-  const tid = r.tournaments[0].id;
+  const tid = r.tournament.id;
   const t = (await api("GET", `/tournaments/${tid}`)).body;
+  assert.equal(t.code, "BUFFALO-DEX-2021");
+  assert.equal(t.name, "Buffalo DEX 2021");
   assert.equal(t.imported, true);
   assert.equal(t.status, "completed");
   assert.deepEqual(t.teams.map((x) => x.name).sort(), ["Hawks", "Owls"]);
-  // The tournament's own stats.
   const sk = (await api("GET", `/tournaments/${tid}/stats/skaters`)).body;
-  const zed = sk.find((x) => x.last_name === "Imported" && x.first_name === "Zed");
+  const zed = sk.find((x) => x.first_name === "Zed");
   assert.equal(zed.goals, 5);
-  assert.equal(zed.points, 7);
   assert.equal(zed.team, "Hawks");
   const teams = (await api("GET", `/tournaments/${tid}/teams`)).body;
   assert.deepEqual(teams.find((x) => x.name === "Owls").roster.map((p) => p.first_name).sort(), ["Wes", "Xia"]);
-  // Counted once in all-time totals and the player's career.
+
+  // The same tournament again is refused, so nothing is counted twice…
+  const again = await api("POST", "/import/historical", { csv, city: "buffalo", series: "DEX", year: 2021 });
+  assert.equal(again.status, 409);
+  assert.match(again.body.error, /BUFFALO-DEX-2021 were already uploaded/);
+  assert.equal(again.body.details.duplicate, true);
   const dir = (await api("GET", "/history/players?q=zed")).body;
   assert.equal(dir[0].skater.goals, 5);
   assert.equal(dir[0].events, 1);
+  // …unless replacing the earlier upload on purpose (e.g. a corrected file).
+  const fixed = csv.replace("Zed,Imported,zed@example.com,Hawks,C,4,5,2,2", "Zed,Imported,zed@example.com,Hawks,C,4,6,2,2");
+  const rep = (await api("POST", "/import/historical", { csv: fixed, ...id, replace: true })).body;
+  assert.equal(rep.tournament.replaced, true);
+  assert.equal(rep.tournament.id, tid);
+  assert.equal((await api("GET", "/history/players?q=zed")).body[0].skater.goals, 6, "replaced, not added");
   const career = (await api("GET", `/players/${zed.player_id}/career`)).body;
   assert.equal(career.history.length, 0, "not listed twice");
   assert.equal(career.tournaments.length, 1);
-  assert.equal(career.career.skater.goals, 5);
-  // The same file again adds to the same tournament (no duplicate tournament).
-  // Undoing the import removes the tournament it created.
-  assert.equal((await api("DELETE", `/import/batches/${encodeURIComponent(r.batch)}`)).status, 200);
+  assert.equal(career.career.skater.goals, 6);
+
+  // Undoing the upload removes the tournament it created.
+  assert.equal((await api("DELETE", `/import/batches/${encodeURIComponent(rep.batch)}`)).status, 200);
   assert.equal((await api("GET", `/tournaments/${tid}`)).status, 404);
-  // Rows can also be put into an existing tournament.
-  const existing = (await api("POST", "/tournaments", { name: "Shell Cup", num_teams: 2, team_names: ["Hawks", "Owls"] })).body;
-  const r2 = (await api("POST", "/import/historical", { csv, tournament_id: existing.id })).body;
-  assert.deepEqual(r2.tournaments.map((x) => [x.id, x.created]), [[existing.id, false]]);
-  assert.equal((await api("GET", `/tournaments/${existing.id}/stats/skaters`)).body.find((x) => x.first_name === "Zed").goals, 5);
-  assert.equal((await api("GET", `/tournaments/${existing.id}`)).body.teams.length, 2, "existing teams reused by name");
+
+  // A tournament set up in BLST with the same city, type and year gets the stats…
+  const shell = (await api("POST", "/tournaments", { name: "Lake Effect Cup", location: "Buffalo", series: "DEX", year: 2022, num_teams: 2, team_names: ["Hawks", "Owls"] })).body;
+  assert.equal(shell.code, "BUFFALO-DEX-2022");
+  const r2 = (await api("POST", "/import/historical", { csv, city: "Buffalo", series: "DEX", year: 2022 })).body;
+  assert.equal(r2.tournament.id, shell.id);
+  assert.equal(r2.tournament.created, false);
+  assert.equal((await api("GET", `/tournaments/${shell.id}`)).body.teams.length, 2, "existing teams reused by name");
+  assert.equal((await api("POST", "/import/historical", { csv, tournament_id: shell.id })).status, 409, "by id too");
+  // …and two tournaments can't share an ID.
+  assert.equal((await api("POST", "/tournaments", { name: "Other", location: "Buffalo", series: "DEX", year: 2022, num_teams: 2 })).status, 409);
 });
 
 test("games have officials of record, any number of each", async () => {
@@ -253,4 +278,17 @@ test("new tournaments: team names in order, and the tournament type", async () =
   assert.deepEqual(teams.map((x) => x.name), ["North Stars", "Team 2", "Seals", "Team 4"]);
   assert.ok(teams.find((x) => x.name === "North Stars").club_id, "a team tournament's named teams carry over");
   assert.equal(teams.find((x) => x.name === "Team 2").club_id, null);
+});
+
+test("the upload form can check a Tournament ID first; organizations set their own tournament types", async () => {
+  const fresh = (await api("GET", "/import/tournament-id?city=Rochester&series=bash&year=2020")).body;
+  assert.deepEqual(fresh, { code: "ROCHESTER-BASH-2020", tournament: null });
+  const taken = (await api("GET", "/import/tournament-id?city=Buffalo&series=DEX&year=2022")).body;
+  assert.equal(taken.tournament.name, "Lake Effect Cup");
+  assert.ok(taken.tournament.uploaded_rows > 0);
+  assert.equal((await api("GET", "/import/tournament-id?city=Buffalo&series=DEX&year=2022", undefined, null)).status, 401);
+  assert.deepEqual((await api("GET", "/org")).body.org.tournament_types, ["DEX", "Bash", "Outlaw"]);
+  assert.deepEqual((await api("PUT", "/admin/tournament-types", { types: ["DEX", "Bash", "Outlaw", " Classic ", "Bash"] })).body.types, ["DEX", "Bash", "Outlaw", "Classic"]);
+  assert.equal((await api("GET", "/import/tournament-id?city=Rochester&series=classic&year=2020")).body.code, "ROCHESTER-CLASSIC-2020");
+  assert.equal((await api("PUT", "/admin/tournament-types", { types: ["X"] }, null)).status, 401);
 });

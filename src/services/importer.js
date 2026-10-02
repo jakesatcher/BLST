@@ -1,6 +1,6 @@
 const db = require("../db");
 const { csvToObjects, normalizeHeader } = require("../lib/csv");
-const { badRequest } = require("../lib/http");
+const { badRequest, notFound, HttpError } = require("../lib/http");
 const { emitDomain } = require("../lib/bus");
 
 // Imports accept either CSV text or an array of JSON objects. Column names
@@ -171,7 +171,7 @@ function numberOrNull(v) {
  * the whole import back so a half-applied file never happens. dry_run
  * always rolls back.
  */
-async function runImport(body, perRow, finish) {
+async function runImport(body, perRow, finish, start) {
   const rows = rowsFrom(body);
   if (!rows.length) throw badRequest("no rows to import");
   if (rows.length > 20000) throw badRequest("too many rows (max 20000 per import)");
@@ -181,6 +181,7 @@ async function runImport(body, perRow, finish) {
   const client = await db.connect();
   try {
     await client.query("BEGIN");
+    if (start) await start(client, report);
     for (let i = 0; i < rows.length; i++) {
       await client.query("SAVEPOINT row");
       const counters = { created_players: report.created_players, created_teams: report.created_teams, moved: report.moved };
@@ -216,61 +217,80 @@ function friendly(err) {
   return err.message;
 }
 
+const tidy = (v) => String(v ?? "").trim().replace(/\s+/g, " ");
+const codeOf = (city, series, year) => `${city.replace(/[^A-Za-z0-9]/g, "").toUpperCase()}-${series.replace(/[^A-Za-z0-9]/g, "").toUpperCase()}-${year}`;
+
 /**
- * The tournament (and team) an imported line belongs to. With
- * `tournament_id` every row goes to that tournament; otherwise rows with an
- * event name join the tournament with that name and season, which is
- * created (marked imported, completed) when it doesn't exist. Teams are
- * found or created by name inside it.
+ * The tournament an upload is for: { tournament_id } or { city, series,
+ * year } (its Tournament ID, e.g. PITTSBURGH-DEX-2025). Checked before
+ * anything is imported, so the same tournament's stats can't be added twice.
  */
-async function importTarget(c, body, v, report, batch) {
-  let tournamentId = body.tournament_id ? Number(body.tournament_id) : null;
-  if (tournamentId) {
-    const t = (await c.query("SELECT id, name, season FROM tournaments WHERE id = $1", [tournamentId])).rows[0];
-    if (!t) throw new Error(`tournament ${tournamentId} not found`);
-    report.tournaments[t.id] = report.tournaments[t.id] || { id: t.id, name: t.name, season: t.season, created: false };
-  } else if (body.link_tournaments !== false && v.event_name) {
-    const name = String(v.event_name).slice(0, 120);
-    const season = v.season ? String(v.season).slice(0, 40) : null;
-    let t = (await c.query(
-      "SELECT id, name, season FROM tournaments WHERE lower(name) = lower($1) AND coalesce(lower(season), '') = coalesce(lower($2), '') ORDER BY id LIMIT 1",
-      [name, season])).rows[0];
-    let created = false;
-    if (!t) {
-      t = (await c.query(
-        `INSERT INTO tournaments (name, season, status, imported, import_batch, format, num_teams)
-         VALUES ($1, $2, 'completed', TRUE, $3, $4, 2) RETURNING id, name, season`,
-        [name, season, batch, body.format === "team" || body.club_teams ? "team" : "draft"])).rows[0];
-      created = true;
-    }
-    tournamentId = t.id;
-    report.tournaments[t.id] = report.tournaments[t.id] || { id: t.id, name: t.name, season: t.season, created };
+async function uploadTarget(body) {
+  if (body.tournament_id) {
+    const t = await db.one("SELECT * FROM tournaments WHERE id = $1", [Number(body.tournament_id)]);
+    if (!t) throw notFound("tournament");
+    return { existing: t, code: t.code };
   }
-  if (!tournamentId) return { tournamentId: null, teamId: null };
-  let teamId = null;
-  if (v.team_name) {
-    const tn = String(v.team_name).slice(0, 80);
-    const found = (await c.query("SELECT id FROM teams WHERE tournament_id = $1 AND blst_team_key(name) = blst_team_key($2) LIMIT 1", [tournamentId, tn])).rows[0];
-    teamId = found ? found.id : (await c.query("INSERT INTO teams (tournament_id, name) VALUES ($1, $2) RETURNING id", [tournamentId, tn])).rows[0].id;
-    // Imported tournaments' team count follows the teams in the file.
-    await c.query(
-      `UPDATE tournaments SET num_teams = GREATEST(2, LEAST(64, (SELECT count(*) FROM teams WHERE tournament_id = $1)))
-        WHERE id = $1 AND imported`, [tournamentId]);
+  const city = tidy(body.city).slice(0, 60);
+  const series = tidy(body.series ?? body.tournament_type).slice(0, 30);
+  const year = Number(body.year);
+  if (!city || !/[A-Za-z0-9]/.test(city)) throw badRequest("city is required (the tournament's city)");
+  if (!series) throw badRequest("tournament type is required");
+  if (!Number.isInteger(year) || year < 1950 || year > 2100) throw badRequest("year is required (four digits)");
+  const org = await db.one("SELECT tournament_types FROM organizations WHERE id = blst_org()");
+  const types = (org && org.tournament_types) || [];
+  const canonical = types.find((x) => x.toLowerCase() === series.toLowerCase());
+  if (types.length && !canonical) throw badRequest(`tournament type must be one of: ${types.join(", ")}`);
+  const code = codeOf(city, canonical || series, year);
+  const existing = await db.one("SELECT * FROM tournaments WHERE code = $1", [code]);
+  return { existing, code, city, series: canonical || series, year };
+}
+
+/** Refuses an upload whose tournament already has stats (unless replacing). */
+async function assertNotDuplicate(target, replace) {
+  const t = target.existing;
+  if (!t) return;
+  const played = await db.one("SELECT count(*)::int AS n FROM games WHERE tournament_id = $1 AND status <> 'scheduled'", [t.id]);
+  if (played.n) throw new HttpError(409, `${target.code || t.name} was scored live in BLST (${played.n} game${played.n === 1 ? "" : "s"}); its stats are already here.`);
+  const prev = await db.one(
+    `SELECT count(*)::int AS rows, min(created_at) AS at, min(import_batch) AS batch FROM historical_stats WHERE tournament_id = $1`, [t.id]);
+  if (prev.rows && !replace) {
+    throw new HttpError(409, `Stats for ${target.code || t.name} were already uploaded (${prev.rows} rows). Uploading again would count them twice. Replace the earlier upload instead, or undo it first.`,
+      { duplicate: true, tournament_id: t.id, code: target.code, rows: prev.rows, uploaded_at: prev.at, batch: prev.batch });
   }
-  return { tournamentId, teamId };
+}
+
+/** Finds the team by name in the tournament, or adds it. */
+async function teamFor(c, tournamentId, teamName) {
+  if (!teamName) return null;
+  const tn = String(teamName).slice(0, 80);
+  const found = (await c.query("SELECT id FROM teams WHERE tournament_id = $1 AND blst_team_key(name) = blst_team_key($2) LIMIT 1", [tournamentId, tn])).rows[0];
+  if (found) return found.id;
+  const id = (await c.query("INSERT INTO teams (tournament_id, name) VALUES ($1, $2) RETURNING id", [tournamentId, tn])).rows[0].id;
+  // Imported tournaments' team count follows the teams in the file.
+  await c.query(
+    `UPDATE tournaments SET num_teams = GREATEST(2, LEAST(64, (SELECT count(*) FROM teams WHERE tournament_id = $1)))
+      WHERE id = $1 AND imported`, [tournamentId]);
+  return id;
 }
 
 /**
- * Imports prior-season / prior-event stat lines. Lines that name an event
- * (or with `tournament_id`) are kept with that tournament, so it has its own
- * stats page, and count toward players' and teams' all-time totals through it.
+ * Imports one tournament's stat lines (one row per player). Every upload
+ * names its tournament: a Tournament ID from city + type + year (the
+ * tournament is created when it doesn't exist yet), or an existing
+ * tournament. A tournament's stats can be uploaded once; `replace: true`
+ * swaps the earlier upload for this one. The lines stay with the tournament
+ * (its own stats page) and count once toward players' and teams' totals.
  */
 async function importHistorical(body) {
   const batch = body.batch || `import-${new Date().toISOString()}`;
   const create = body.create_missing_players !== false;
-  const tournaments = {};
+  const target = await uploadTarget(body);
+  await assertNotDuplicate(target, Boolean(body.replace));
+  let t = target.existing;
+  const info = { code: target.code, created: !t, replaced: false };
+  const format = body.format === "team" || body.club_teams ? "team" : "draft";
   const report = await runImport(body, async (c, row, rep) => {
-    rep.tournaments = tournaments;
     const player = await resolvePlayer(c, row, { create, report: rep });
     const v = {};
     for (const [field, aliases] of Object.entries(HISTORY_ALIASES)) v[field] = pick(row, aliases);
@@ -283,18 +303,28 @@ async function importHistorical(body) {
       line.gp = 0;
     }
     if (v.shots_against === undefined && v.saves !== undefined) line.shots_against = toInt(v.saves, "saves") + line.goals_against;
-    // Team tournaments (or the box ticked): the team name is a team that carries over.
-    if ((body.club_teams || body.format === "team") && v.team_name) {
+    if (t.format === "team" && v.team_name) {
       await c.query("INSERT INTO clubs (name) VALUES ($1) ON CONFLICT (org_id, name_key) DO NOTHING", [String(v.team_name).slice(0, 80)]);
     }
-    const target = await importTarget(c, body, v, rep, batch);
+    const teamId = await teamFor(c, t.id, v.team_name);
     const cols = ["player_id", "season", "event_name", "team_name", ...INT_FIELDS, "source", "import_batch", "tournament_id", "team_id"];
-    const vals = [player.id, v.season ?? null, v.event_name ?? null, v.team_name ?? null, ...INT_FIELDS.map((f) => line[f]),
-      body.source || "import", batch, target.tournamentId, target.teamId];
+    const vals = [player.id, t.season ?? (t.year ? String(t.year) : null), t.name, v.team_name ?? null, ...INT_FIELDS.map((f) => line[f]),
+      body.source || "import", batch, t.id, teamId];
     await c.query(`INSERT INTO historical_stats (${cols.join(", ")}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(", ")})`, vals);
+  }, null, async (c) => {
+    if (!t) {
+      t = (await c.query(
+        `INSERT INTO tournaments (name, location, series, year, season, status, imported, import_batch, format, num_teams)
+         VALUES ($1, $2, $3, $4, $5, 'completed', TRUE, $6, $7, 2) RETURNING *`,
+        [`${target.city} ${target.series} ${target.year}`, target.city, target.series, target.year, String(target.year), batch, format])).rows[0];
+    } else if (body.replace) {
+      const del = await c.query("DELETE FROM historical_stats WHERE tournament_id = $1", [t.id]);
+      info.replaced = del.rowCount > 0;
+    }
   });
   report.batch = batch;
-  report.tournaments = Object.values(tournaments);
+  if (report.committed) emitDomain("history.imported", { tournament_id: t.id, batch });
+  report.tournament = { id: report.committed || !info.created ? t.id : null, name: t.name, code: t.code || info.code, ...info };
   return report;
 }
 
@@ -502,4 +532,4 @@ async function rosterCsv(tournamentId, { template = false } = {}) {
   return toCsv(out, ["team", "number", "first_name", "last_name", "position", "role", "email", "round", "pick", "registration_code", "external_id"]);
 }
 
-module.exports = { rowsFrom, importHistorical, importRoster, rosterCsv, splitName, parseMinutes };
+module.exports = { uploadTarget, rowsFrom, importHistorical, importRoster, rosterCsv, splitName, parseMinutes };

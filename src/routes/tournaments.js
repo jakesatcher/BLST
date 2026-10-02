@@ -45,6 +45,9 @@ function tournamentFields(body) {
     status: optEnum(body.status, "status", ["upcoming", "active", "completed"]),
     // draft: new teams each time (stats follow players); team: teams carry over.
     format: optEnum(body.format, "format", ["draft", "team"]),
+    // Tournament ID parts (with location as the city): e.g. PITTSBURGH-DEX-2025.
+    series: optString(body.series, "series", { max: 30 }),
+    year: optInt(body.year, "year", { min: 1950, max: 2100 }),
     factions_event_id: optString(body.factions_event_id, "factions_event_id", { max: 100 }),
     factions_points: body.factions_points === undefined ? undefined : JSON.stringify(factions.validatePoints(body.factions_points)),
   };

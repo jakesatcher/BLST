@@ -88,7 +88,7 @@ test.before(async () => {
   S.fall = fall.body.id;
   S.winter = winter.body.id;
   // Sam already has imported history (from an older league) and an email on file.
-  await api("POST", "/import/historical", { rows: [{ first_name: "Sam", last_name: "Sniper", email: "sam@example.com", season: "2025", gp: 10, g: 8, a: 6 }] });
+  await api("POST", "/import/historical", { city: "Pastville", series: "Bash", year: 2025, rows: [{ first_name: "Sam", last_name: "Sniper", email: "sam@example.com", season: "2025", gp: 10, g: 8, a: 6 }] });
   state.records = [
     rec(101, 1000, 9001, "BLPA Fall Classic 2026", 5001, "Sam", "Sniper", "SAM@example.com", "1990-04-02"),
     rec(102, 1000, 9001, "BLPA Fall Classic 2026", 5002, "Kid", "One", "parent@example.com", "2012-01-01"),

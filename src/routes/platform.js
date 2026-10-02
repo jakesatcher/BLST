@@ -35,7 +35,7 @@ function orgView(o, req) {
 /** Where am I? The organization for this address (null on the platform). */
 router.get("/org", (req, res) => {
   res.json({
-    org: req.org ? { slug: req.org.slug, name: req.org.name, factions_enabled: req.org.factions_enabled, url: orgUrl(req.org.slug, req) } : null,
+    org: req.org ? { slug: req.org.slug, name: req.org.name, factions_enabled: req.org.factions_enabled, tournament_types: req.org.tournament_types || [], url: orgUrl(req.org.slug, req) } : null,
     platform: { app_domain: config.appDomain || null, url: platformUrl(req) },
   });
 });

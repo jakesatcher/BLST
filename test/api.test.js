@@ -257,7 +257,7 @@ test("moving a player keeps earlier stats with the old team", async () => {
 
 test("historical import and career totals", async () => {
   const csv = "Player,Season,Team,GP,G,A,PIM,+/-\nSam Sniper,2025,Old Wolves,10,8,6,4,5\nSniper, Sam,2024,Old Wolves,x,1,1,0,0\n";
-  const bad = await api("POST", "/import/historical", { csv });
+  const bad = await api("POST", "/import/historical", { csv, city: "Oldtown", series: "DEX", year: 2025 });
   assert.equal(bad.status, 422);
   const good = await api("POST", "/import/historical", {
     rows: [
@@ -265,19 +265,20 @@ test("historical import and career totals", async () => {
       { first_name: "Bob", last_name: "Backstop", position: "G", season: "2025", GP: 5, W: 3, L: 2, SA: 150, GA: 12, SO: 1, MIN: "250:00" },
       { name: "New Historical", season: "2023", GP: 3, G: 1 },
     ],
-    source: "old-league-site",
+    source: "old-league-site", city: "Oldtown", series: "DEX", year: 2025,
   });
   assert.equal(good.status, 200);
   assert.equal(good.body.imported, 3);
   assert.equal(good.body.created_players, 1);
 
   const career = (await api("GET", `/players/${S.p.Sam}/career`)).body;
-  assert.equal(career.history.length, 1);
+  assert.equal(career.history.length, 0, "the lines belong to the imported tournament");
+  assert.ok(career.tournaments.some((l) => l.tournament === "Oldtown DEX 2025" && l.skater.goals === 8));
   assert.equal(career.career.skater.goals, 10, "8 historical + 2 live");
   assert.equal(career.career.skater.gp, 12);
   const bob = (await api("GET", `/players/${S.p.Bob}/career`)).body;
   assert.equal(bob.career.goalie.gp, 7, "5 imported goalie games + 2 live");
-  assert.equal(bob.history[0].toi_sec, 15000);
+  assert.equal(bob.tournaments.find((l) => l.tournament === "Oldtown DEX 2025").goalie.toi_sec, 15000);
 
   const batches = (await api("GET", "/import/batches")).body;
   assert.equal(batches.length, 1);
