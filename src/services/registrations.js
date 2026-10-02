@@ -78,12 +78,24 @@ async function matchPlayer(c, person) {
   if (possible.length === 1) {
     return { player: possible[0], method: "name", needsReview: true, note: "Matched on name only: confirm this is the same person." };
   }
+  // No exact name: imported players (no email) with the same last name and
+  // a nickname or initial ("Mike" / "Michael", "J." / "John") are flagged
+  // for an admin to confirm under Admin → History → Match players.
+  let similar = [];
+  if (!possible.length && key) {
+    const { firstNameMatch } = require("./history");
+    const [first, ...rest] = key.split(" ");
+    const sameLast = await q("SELECT * FROM players WHERE email IS NULL AND name_key LIKE $1 ORDER BY id", [`% ${rest.join(" ")}`]);
+    similar = sameLast.filter((r) => r.name_key.split(" ").slice(1).join(" ") === rest.join(" ") && firstNameMatch(first, r.name_key.split(" ")[0]) && !conflicts(r));
+  }
+  const maybe = possible.length > 1 ? possible : similar;
   return {
     player: null,
     method: "new",
-    needsReview: possible.length > 1,
-    note: possible.length > 1 ? `Possible duplicates: ${possible.map((p) => p.player_code).join(", ")}` : null,
-    candidates: possible.map((p) => p.id),
+    needsReview: maybe.length > 0,
+    note: possible.length > 1 ? `Possible duplicates: ${possible.map((p) => p.player_code).join(", ")}`
+      : similar.length ? `May be the same person as ${similar.map((p) => `${p.first_name} ${p.last_name} (${p.player_code})`).join(", ")} from imported history` : null,
+    candidates: maybe.map((p) => p.id),
   };
 }
 

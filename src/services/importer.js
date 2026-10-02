@@ -44,6 +44,7 @@ const INT_FIELDS = [
   "goalie_gp", "wins", "losses", "ot_losses", "ties", "shots_against", "goals_against", "shutouts", "toi_sec",
 ];
 
+/** Rows from a JSON array or CSV text, with normalized column names. */
 function rowsFrom(body) {
   if (Array.isArray(body.rows)) {
     return body.rows.map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [normalizeHeader(k), v == null ? "" : String(v).trim()])));
@@ -232,6 +233,10 @@ async function importHistorical(body) {
       line.gp = 0;
     }
     if (v.shots_against === undefined && v.saves !== undefined) line.shots_against = toInt(v.saves, "saves") + line.goals_against;
+    // Team tournaments: the team name is a team that carries over (a club).
+    if (body.club_teams && v.team_name) {
+      await c.query("INSERT INTO clubs (name) VALUES ($1) ON CONFLICT (org_id, name_key) DO NOTHING", [String(v.team_name).slice(0, 80)]);
+    }
     const cols = ["player_id", "season", "event_name", "team_name", ...INT_FIELDS, "source", "import_batch"];
     const vals = [player.id, v.season ?? null, v.event_name ?? null, v.team_name ?? null, ...INT_FIELDS.map((f) => line[f]),
       body.source || "import", batch];
@@ -445,4 +450,4 @@ async function rosterCsv(tournamentId, { template = false } = {}) {
   return toCsv(out, ["team", "number", "first_name", "last_name", "position", "role", "email", "round", "pick", "registration_code", "external_id"]);
 }
 
-module.exports = { importHistorical, importRoster, rosterCsv, splitName, parseMinutes };
+module.exports = { rowsFrom, importHistorical, importRoster, rosterCsv, splitName, parseMinutes };

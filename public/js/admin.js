@@ -94,7 +94,7 @@
   await BLST.ready;
   const factionsOn = Boolean(BLST.org && BLST.org.factions_enabled);
   const view = h("div");
-  const tabNames = [["tournaments", "Tournaments"], ["players", "Players"], ["history", "Historical import"], ["org", "Organization"], ["keys", "API keys"], ["webhooks", "Webhooks"],
+  const tabNames = [["tournaments", "Tournaments"], ["players", "Players"], ["history", "History"], ["org", "Organization"], ["keys", "API keys"], ["webhooks", "Webhooks"],
     ...(factionsOn ? [["factions", "Factions"]] : []), ["security", "Security"]];
   let firstTab = location.hash.slice(1).split("/")[0] || "tournaments";
   if (firstTab === "accounts") firstTab = "org";
@@ -165,6 +165,8 @@
     return [
       field("Name", input("name", { required: true, value: t.name || "", placeholder: "Fall Classic" }), "wide"),
       field("Season", input("season", { value: t.season || "" })),
+      field("Format", select("format", [["draft", "Draft (new teams each time)"], ["team", "Teams (same teams carry over)"]], t.format || "draft"),
+        "wide"),
       field("Location", input("location", { value: t.location || "" })),
       field("Start date", input("start_date", { type: "date", value: t.start_date || "" })),
       field("End date", input("end_date", { type: "date", value: t.end_date || "" })),
@@ -960,7 +962,16 @@
   // -------------------------------------------------------------------------
   // Historical import
 
-  async function historyView() {
+  function historyView() {
+    const sub = h("div");
+    const bar = tabs([["import", "Import stats"], ["match", "Match players"], ["teams", "Teams over time"]],
+      (id) => ({ import: importHistoryView, match: matchPlayersView, teams: clubsView })[id](sub).catch((e) => mount(sub, h("p", { class: "notice error" }, e.message))),
+      "import", { size: "medium" });
+    mount(view, bar.el, sub);
+    return importHistoryView(sub);
+  }
+
+  async function importHistoryView(view) {
     const area = h("textarea", { placeholder: "name,season,team,gp,g,a,pim,+/-\nSam Sniper,2025,Wolves,10,8,6,4,5" });
     const report = h("div");
     const batches = h("div");
@@ -978,7 +989,7 @@
       ], list, { sortKey: "imported_at" }));
     };
     const go = async (dry) => {
-      const body = importPayload(area.value, { dry_run: dry, source: source.value || undefined, skip_errors: $("#hi-skip").checked, create_missing_players: $("#hi-create").checked });
+      const body = importPayload(area.value, { dry_run: dry, source: source.value || undefined, skip_errors: $("#hi-skip").checked, create_missing_players: $("#hi-create").checked, club_teams: $("#hi-clubs").checked });
       try {
         mount(report, importReport(await api("POST", "/import/historical", body)));
         if (!dry) loadBatches();
@@ -995,11 +1006,112 @@
         area,
         h("div", { class: "row" },
           h("label", { class: "inline" }, h("input", { type: "checkbox", id: "hi-create", checked: true }), "Create players that don't exist"),
-          h("label", { class: "inline" }, h("input", { type: "checkbox", id: "hi-skip" }), "Skip bad rows")),
+          h("label", { class: "inline" }, h("input", { type: "checkbox", id: "hi-skip" }), "Skip bad rows"),
+          h("label", { class: "inline" }, h("input", { type: "checkbox", id: "hi-clubs" }), "Team tournaments: these teams carry over")),
+        h("p", { class: "muted small" }, "Players are matched by registration or player code, email, then name. No emails in the file? That's fine: match them to registered players later under Match players."),
         h("div", { class: "row", style: { marginTop: "10px" } }, h("button", { onclick: () => go(true) }, "Dry run"), h("button", { class: "primary", onclick: () => go(false) }, "Import")),
         report),
       h("div", { class: "card" }, h("h2", null, "Previous imports"), batches));
     loadBatches();
+  }
+
+  /** Imported players (often without email) who may be registered players. */
+  async function matchPlayersView(view) {
+    const [sug] = await Promise.all([get("/admin/identity/suggestions")]);
+    const list = h("div");
+    const who = (p) => h("div", null,
+      h("a", { href: `/player?id=${p.id}`, target: "_blank" }, h("strong", null, p.name)), " ", h("span", { class: "muted small" }, p.player_code),
+      h("div", { class: "small muted" }, p.email || "no email",
+        p.history_lines ? ` · ${p.history_lines} imported line${p.history_lines === 1 ? "" : "s"}${p.history ? ` (${p.history})` : ""}` : "",
+        p.tournaments ? ` · ${p.tournaments} tournament${p.tournaments === 1 ? "" : "s"}` : ""));
+    const render = (rows) => mount(list, rows.length
+      ? h("ul", { class: "card-list" }, rows.map((s) => h("li", { class: "card match-card" },
+        h("div", { class: "match-pair" }, who(s.without_email), h("div", { class: "match-arrow", "aria-hidden": "true" }, "⇄"), who(s.with_email)),
+        h("div", { class: "row between" },
+          h("span", { class: "badge" }, { "same name": "Same name", nickname: "Nickname", initial: "Initial" }[s.match], s.note ? ` · ${s.note}` : ""),
+          h("div", { class: "row" },
+            h("button", { class: "sm", onclick: async () => {
+              await run(() => api("POST", "/admin/identity/dismiss", { player_a: s.without_email.id, player_b: s.with_email.id }), "Kept apart");
+              render(rows.filter((x) => x !== s));
+            } }, "Different people"),
+            h("button", { class: "sm primary", onclick: async () => {
+              if (!(await confirmSheet(`Merge ${s.without_email.name} (${s.without_email.player_code}) into ${s.with_email.name} (${s.with_email.player_code})? All stats move to ${s.with_email.name}. This can't be undone.`, { title: "Same person", confirmLabel: "Merge" }))) return;
+              await run(() => api("POST", `/players/${s.with_email.id}/merge`, { from_player_id: s.without_email.id }), "Merged: history now follows this player");
+              matchPlayersView(view);
+            } }, "Same person: merge"))))))
+      : h("p", { class: "muted" }, "No suggestions. Imported players are matched automatically when someone registers with the same name; nicknames and initials show up here."));
+    render(sug);
+
+    const area = h("textarea", { placeholder: "player_code,email\nBLP-000123,sam@example.com\n\nor: name,email\nSam Sniper,sam@example.com" });
+    const report = h("div");
+    const go = async (dry) => {
+      try {
+        const r = await api("POST", "/admin/identity/emails", { ...importPayload(area.value, {}), dry_run: dry });
+        mount(report, h("div", { class: `notice ${r.errors.length ? "error" : ""}`, style: { marginTop: "10px" } },
+          h("strong", null, dry ? "Dry run: " : "Done: "), `${r.linked} email${r.linked === 1 ? "" : "s"} attached, ${r.already} already set`,
+          r.merge_suggested.length ? h("div", null, h("p", null, "These emails already belong to another player, probably the same person:"),
+            h("ul", null, r.merge_suggested.map((m) => h("li", null, `Row ${m.row}: ${m.merge} → ${m.keep} `,
+              dry ? "" : h("button", { class: "sm", onclick: async (e) => {
+                await run(() => api("POST", `/players/${m.keep_id}/merge`, { from_player_id: m.merge_id }), "Merged");
+                e.target.disabled = true;
+              } }, "Merge"))))) : "",
+          r.errors.length ? h("ul", { class: "small" }, r.errors.slice(0, 50).map((e) => h("li", null, `Row ${e.row}: ${e.error}`))) : ""));
+        if (!dry) matchPlayersView(view);
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+    mount(view,
+      h("div", { class: "card" }, h("h2", null, "Same person?"),
+        h("p", { class: "muted small" }, "Imported players without an email, next to registered players with a similar name. Merge them and every stat follows the one person from then on, whatever team they play for."),
+        list),
+      h("div", { class: "card" }, h("h2", null, "Attach emails to imported players"),
+        h("p", { class: "muted small" }, "A list with a player code (or name) and an email. Later registrations with that email then link to the player and their history automatically. Emails are never overwritten."),
+        h("div", { class: "row", style: { marginBottom: "8px" } }, fileLoader(area)),
+        area,
+        h("div", { class: "row", style: { marginTop: "10px" } }, h("button", { onclick: () => go(true) }, "Dry run"), h("button", { class: "primary", onclick: () => go(false) }, "Attach emails")),
+        report));
+  }
+
+  /** Teams that carry over between team tournaments. */
+  async function clubsView(view) {
+    const clubs = await get("/clubs");
+    const reload = () => clubsView(view);
+    const rec = (r) => `${r.w}-${r.l}-${r.otl}${r.t ? `-${r.t}` : ""}`;
+    mount(view, h("div", { class: "card" },
+      h("div", { class: "row between" }, h("h2", { style: { margin: 0 } }, "Teams over time"),
+        h("button", { class: "primary", onclick: async () => {
+          const v = await formSheet("Add a team", [{ name: "name", label: "Name", required: true }, { name: "short_name", label: "Short name (optional)" }], { submitLabel: "Add" });
+          if (!v) return;
+          await run(() => api("POST", "/clubs", v), "Added");
+          reload();
+        } }, "Add a team")),
+      h("p", { class: "muted small" }, "In tournaments set to \"Teams (same teams carry over)\", each team joins the team with the same name here (created automatically), and imported stat lines with that team name count for it. Two names for one team? Merge them."),
+      clubs.length ? table([
+        { key: "name", label: "Team", fmt: (c) => h("a", { href: `/club?id=${c.id}`, target: "_blank" }, c.name) },
+        { key: "tournaments", label: "Tournaments", num: true },
+        { key: "history_lines", label: "Imported lines", num: true },
+        { key: "record", label: "W-L-OTL", sort: false, fmt: (c) => rec(c.record) },
+        { key: "x", label: "", sort: false, fmt: (c) => h("div", { class: "row" },
+          h("button", { class: "sm", onclick: async () => {
+            const v = await formSheet(`Rename ${c.name}`, [{ name: "name", label: "Name", value: c.name, required: true }, { name: "short_name", label: "Short name", value: c.short_name || "" }]);
+            if (!v) return;
+            await run(() => api("PATCH", `/clubs/${c.id}`, v), "Renamed");
+            reload();
+          } }, "Rename"),
+          clubs.length > 1 ? h("button", { class: "sm", onclick: async () => {
+            const v = await formSheet(`Merge into ${c.name}`, [{ name: "from", label: "This team is the same as", type: "select", options: clubs.filter((x) => x.id !== c.id).map((x) => [x.id, x.name]) }],
+              { submitLabel: "Merge", intro: `The other team's tournaments and imported lines move to ${c.name}, and the other name is removed.` });
+            if (!v) return;
+            await run(() => api("POST", `/clubs/${c.id}/merge`, { from_club_id: Number(v.from) }), "Merged");
+            reload();
+          } }, "Merge…") : "",
+          h("button", { class: "sm danger", onclick: async () => {
+            if (!(await confirmSheet(`Remove ${c.name} from team history? Tournaments and stats stay; they just stop adding up under this team.`, { title: "Remove", confirmLabel: "Remove", danger: true }))) return;
+            await run(() => api("DELETE", `/clubs/${c.id}`), "Removed");
+            reload();
+          } }, "Remove")) },
+      ], clubs, { sortKey: "name", sortDir: 1 }) : h("p", { class: "muted" }, "No teams yet. Set a tournament's format to \"Teams (same teams carry over)\" under Tournaments → Settings, or import history with \"these teams carry over\" ticked.")));
   }
 
   // -------------------------------------------------------------------------

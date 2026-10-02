@@ -475,3 +475,10 @@ button.link { background: none; border: 0; padding: 6px 0; color: var(--accent);
 .backup-codes { font-family: var(--mono); font-size: 1.05rem; line-height: 1.7; columns: 2; background: var(--surface-2);
   border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; margin: 0; user-select: all; }
 .totp-qr { width: 200px; height: 200px; background: #fff; padding: 8px; border-radius: 10px; align-self: center; }
+/* Six or more menu items on a phone: tighter labels so they fit. */
+@media (max-width: 520px) {
+  .mainnav.many { gap: 4px; }
+  .mainnav.many a { font-size: 0.7rem; padding: 8px 2px; min-height: 58px; letter-spacing: -0.01em; }
+}
+.match-pair { display: grid; gap: 4px; margin-bottom: 8px; }
+.match-arrow { color: var(--muted); }

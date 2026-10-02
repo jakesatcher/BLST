@@ -20,6 +20,8 @@ It's one app for many leagues. Each **organization** gets its own address, and *
 | Page | Who | What |
 |---|---|---|
 | `/stats` | Public | Live and upcoming games, list of tournaments (`/` goes here) |
+| `/history` | Public | All-time player stats (search, leaderboards) across every tournament and imported season, and teams that carry over between tournaments |
+| `/club?id=N` | Public | One team across tournaments: season-by-season record and its players' stats while on the team |
 | `/factions` | Public | Factions, when the organization uses it: faction standings, standings by event, top members |
 | `/tournament?id=N` | Public | Scores, standings, leaders, skater and goalie stats, rosters, Factions standings when the tournament counts for Factions |
 | `/game?id=N` | Public | Live scoreboard (clock, score, shots on goal, power play, penalty-box countdowns), scoring summary, box score, lineups, play-by-play |
@@ -139,6 +141,13 @@ heroku open
 ```
 
 The `Procfile` runs migrations in the release phase. TLS to Heroku Postgres is turned on automatically, and the app refuses to boot on Heroku without `ADMIN_TOKEN` until an admin account exists. Run **one web dyno**: live updates fan out in memory. Before scaling out, move the event bus in `src/lib/bus.js` to Postgres LISTEN/NOTIFY.
+
+## History across tournaments
+
+- **Players:** a player is one record for life, so their stats follow them from team to team. In **draft tournaments** (teams reshuffled each time) that's the history that matters: `/history` shows everyone's all-time totals, and each player's page lists every tournament with the team they were on.
+- **Teams:** set a tournament's **Format** to *Teams (same teams carry over)*. Each team then joins the team with the same name from earlier team tournaments (created automatically; placeholder names like "Team 3" don't count until renamed). Its page shows the record each time and every player's stats while on that team. Two spellings of one team? Admin → History → Teams over time → **Merge**.
+- **Imported history:** Admin → History → **Import stats** (CSV: name, season, event, team, GP, G, A, …). Tick *these teams carry over* for team-tournament history so the team names join those teams.
+- **No emails in old files?** Imported players are matched when someone registers: an exact name links them (flagged for review); a nickname or initial ("Mike" / "Michael", "J. Quinn") is flagged. Admin → History → **Match players** lists every likely pair (imported player without email ⇄ player with email): **Same person: merge** moves all their stats onto one player; **Different people** hides the pair for good. Or attach emails in bulk (player code or name + email); registrations with those emails then link automatically.
 
 ## Accounts and sign-in
 

@@ -43,6 +43,8 @@ function tournamentFields(body) {
     points_otl: optInt(body.points_otl, "points_otl", { min: 0, max: 10 }),
     points_tie: optInt(body.points_tie, "points_tie", { min: 0, max: 10 }),
     status: optEnum(body.status, "status", ["upcoming", "active", "completed"]),
+    // draft: new teams each time (stats follow players); team: teams carry over.
+    format: optEnum(body.format, "format", ["draft", "team"]),
     factions_event_id: optString(body.factions_event_id, "factions_event_id", { max: 100 }),
     factions_points: body.factions_points === undefined ? undefined : JSON.stringify(factions.validatePoints(body.factions_points)),
   };

@@ -238,6 +238,7 @@
     admin: ["M4 6h10", "M18 6h2", "M4 12h4", "M12 12h8", "M4 18h12", "M20 18h0", "M16 4v4", "M10 10v4", "M18 16v4"],
     docs: ["M8 7l-5 5 5 5", "M16 7l5 5-5 5", "M13.5 5l-3 14"],
     factions: ["M12 3l8 3v6c0 4.5-3.4 8.2-8 9-4.6-.8-8-4.5-8-9V6z", "M12 8v8", "M8.5 11.5h7"],
+    history: ["M3 12a9 9 0 1 0 3-6.7", "M3 4v4h4", "M12 7v5l3 2"],
     account: ["M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z", "M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5"],
   };
   function icon(name) {
@@ -258,6 +259,7 @@
     const navLinks = () => (ORG
       ? [
         ["index", "/stats", "Stats", "Stats"],
+        ["history", "/history", "History", "History"],
         ...(ORG.factions_enabled ? [["factions", "/factions", "Factions", "Factions"]] : []),
         ["scorekeeper", "/scorekeeper", "Scorekeeper", "Scoring"],
         ["admin", "/admin", "Admin & setup", "Setup"],
@@ -289,6 +291,7 @@
     const renderNav = () => {
       const links = navLinks();
       nav.style.setProperty("--n", String(links.length));
+      nav.classList.toggle("many", links.length > 5);
       mount(nav, links.map(([id, href, label, short]) =>
         h("a", { href, class: id === active ? "active" : null, "aria-current": id === active ? "page" : null, "aria-label": label },
           icon(id), h("span", { class: "long" }, label), h("span", { class: "short", "aria-hidden": "true" }, short))));
