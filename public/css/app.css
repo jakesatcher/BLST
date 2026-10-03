@@ -497,3 +497,7 @@ button.link { background: none; border: 0; padding: 6px 0; color: var(--accent);
 .officials-row { display: grid; grid-template-columns: 9.5em 1fr auto; gap: 8px; align-items: center; }
 @media (max-width: 420px) { .officials-row { grid-template-columns: 1fr auto; } .officials-row select { grid-column: 1 / -1; } }
 .bad-text { color: var(--danger); }
+.rating-pill { display: inline-block; min-width: 2.4em; text-align: center; font-weight: 800; padding: 2px 8px; border-radius: 999px; color: #fff;
+  background: linear-gradient(90deg, var(--accent) var(--r), #64748b var(--r)); }
+.rating-why summary { cursor: pointer; color: var(--accent); font-size: 0.85rem; }
+.rating-why ul { margin: 6px 0 0; padding-left: 18px; min-width: 260px; }

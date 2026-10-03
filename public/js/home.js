@@ -4,13 +4,19 @@
   const app = $("#app");
   await BLST.ready;
 
-  const [games, tournaments] = await Promise.all([get("/games"), get("/tournaments")]);
+  const [games, allTournaments, leagues] = await Promise.all([get("/games"), get("/tournaments"), get("/leagues").catch(() => [])]);
+  // League divisions are shown under their league; the grid is for tournaments.
+  const tournaments = allTournaments.filter((t) => t.kind !== "league");
   const cards = gameCards(games, { showTournament: true });
 
   mount(
     app,
     h("h1", null, "Live & upcoming"),
     games.length ? cards.el : h("p", { class: "muted" }, "No games today."),
+    leagues.length ? [h("h2", { style: { marginTop: "28px" } }, "Leagues"),
+      h("div", { class: "grid three" }, leagues.map((l) => h("a", { class: "card game-card", href: `/league?id=${l.id}` },
+        h("strong", null, l.name),
+        h("div", { class: "muted small" }, `${l.divisions} division${l.divisions === 1 ? "" : "s"}${l.current_season ? ` · ${l.current_season} season` : ""}`))))] : "",
     h("h2", { style: { marginTop: "28px" } }, "Tournaments"),
     tournaments.length
       ? h(

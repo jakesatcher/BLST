@@ -101,7 +101,7 @@
   await BLST.ready;
   const factionsOn = Boolean(BLST.org && BLST.org.factions_enabled);
   const view = h("div");
-  const tabNames = [["tournaments", "Tournaments"], ["players", "Players"], ["history", "History"], ["org", "Organization"], ["keys", "API keys"], ["webhooks", "Webhooks"],
+  const tabNames = [["tournaments", "Tournaments"], ["leagues", "Leagues"], ["players", "Players"], ["history", "History"], ["org", "Organization"], ["keys", "API keys"], ["webhooks", "Webhooks"],
     ...(factionsOn ? [["factions", "Factions"]] : []), ["security", "Security"]];
   let firstTab = location.hash.slice(1).split("/")[0] || "tournaments";
   if (firstTab === "accounts") firstTab = "org";
@@ -113,7 +113,7 @@
     mainTabs.el, view);
 
   function show(tab) {
-    const fn = { tournaments: tournamentsView, players: playersView, history: historyView, org: orgView, keys: keysView, webhooks: webhooksView, factions: factionsGlobalView, security: securityView }[tab];
+    const fn = { tournaments: tournamentsView, players: playersView, history: historyView, leagues: leaguesView, org: orgView, keys: keysView, webhooks: webhooksView, factions: factionsGlobalView, security: securityView }[tab];
     mount(view, h("p", { class: "muted" }, "Loading…"));
     fn().catch((err) => mount(view, h("p", { class: "notice error" }, err.message)));
   }
@@ -165,6 +165,137 @@
         h("li", { class: ok ? "done" : null },
           h("span", { class: "lbl" }, h("span", { class: "tick" }, ok ? "✓" : i + 1), label),
           !ok && cta ? h("button", { class: "sm primary", onclick: go }, cta) : "")))));
+  }
+
+  /** Team-name boxes, one per team; typed names are kept when the count changes. Returns { el, count, names() }. */
+  function teamNameLines(initial = 4) {
+    const typed = [];
+    const box = h("div", { class: "team-name-lines" });
+    const draw = (n) => {
+      for (const [i, el] of [...box.querySelectorAll("input")].entries()) typed[i] = el.value;
+      mount(box, range(1, n).map((i) => h("label", { class: "team-line" }, h("span", { class: "team-line-no" }, `${i}`),
+        h("input", { value: typed[i - 1] || "", placeholder: `Team ${i}`, maxlength: 80, "aria-label": `Team ${i} name` }))));
+    };
+    const count = select("num_teams", range(2, 32), initial, { "data-num": 1, onchange: (e) => draw(Number(e.target.value)) });
+    draw(initial);
+    return { el: box, count, names: () => [...box.querySelectorAll("input")].map((x) => x.value.trim()) };
+  }
+
+  // -------------------------------------------------------------------------
+  // Leagues: league -> seasons -> divisions; each division in a season is a
+  // competition, managed under Tournaments like any other.
+
+  let selectedLeague = null;
+  async function leaguesView() {
+    const list = await get("/leagues");
+    if (!selectedLeague && list.length) selectedLeague = list[0].id;
+    const body = h("div");
+    const picker = select("league", [["", "— choose —"], ...list.map((l) => [l.id, l.name])], selectedLeague || "", {
+      onchange: (e) => { selectedLeague = Number(e.target.value) || null; leaguesView(); } });
+    mount(view,
+      h("div", { class: "row between", style: { marginBottom: "12px" } },
+        h("div", { class: "row" }, h("strong", null, "League"), picker, selectedLeague ? h("a", { href: `/league?id=${selectedLeague}`, target: "_blank" }, "Public page ↗") : ""),
+        h("button", { class: "primary", onclick: newLeague }, "New league")),
+      body);
+    if (!selectedLeague) return mount(body, h("p", { class: "muted" }, "No leagues yet. A league runs seasons; each season has divisions (B, C, D…) with their own teams, schedule and standings."));
+    const L = await get(`/leagues/${selectedLeague}`);
+    const reload = () => leaguesView();
+
+    const divisionsCard = h("div", { class: "card" }, h("h2", null, "Divisions"),
+      h("p", { class: "muted small" }, "Rank 1 is the strongest division. Strength scales production in player ratings (blank = from the rank: 1.00, 0.85, 0.70 …)."),
+      table([
+        { key: "name", label: "Division" }, { key: "rank", label: "Rank", num: true },
+        { key: "strength_used", label: "Strength", num: true, fmt: (d) => `${d.strength_used}${d.strength == null ? " (auto)" : ""}` },
+        { key: "x", label: "", sort: false, fmt: (d) => h("div", { class: "row" },
+          h("button", { class: "sm", onclick: async () => {
+            const v = await formSheet(`${d.name} division`, [
+              { name: "name", label: "Name", value: d.name, required: true },
+              { name: "rank", label: "Rank (1 = strongest)", type: "number", value: d.rank, min: 1, max: 20 },
+              { name: "strength", label: "Strength for ratings (blank = automatic)", value: d.strength ?? "", placeholder: "e.g. 0.85" },
+            ]);
+            if (!v) return;
+            await run(() => api("PATCH", `/leagues/${L.id}/divisions/${d.id}`, { ...v, strength: v.strength === null ? null : Number(v.strength) }), "Saved");
+            reload();
+          } }, "Edit"),
+          h("button", { class: "sm danger", onclick: async () => {
+            await run(() => api("DELETE", `/leagues/${L.id}/divisions/${d.id}`), "Removed");
+            reload();
+          } }, "Remove")) },
+      ], L.divisions, { sortKey: "rank", sortDir: 1 }),
+      h("button", { style: { marginTop: "8px" }, onclick: async () => {
+        const v = await formSheet("Add a division", [{ name: "name", label: "Name", required: true, placeholder: "e.g. C" }], { submitLabel: "Add" });
+        if (!v) return;
+        await run(() => api("POST", `/leagues/${L.id}/divisions`, v), "Division added");
+        reload();
+      } }, "Add a division"));
+
+    const startDivision = async (season, d) => {
+      const lines = teamNameLines(4);
+      const err = h("div", { class: "notice error hidden" });
+      const { close } = BLST.openSheet(`${d.name} division · ${season.name}`, h("div", { class: "stack" },
+        h("p", { class: "muted small", style: { margin: 0 } }, "Teams with the same name as last season carry over (record and players)."),
+        field("Number of teams", lines.count), lines.el, err), (c) => [
+        h("button", { type: "button", onclick: () => c(null) }, "Cancel"),
+        h("button", { type: "button", class: "primary", onclick: async () => {
+          try {
+            const comp = await api("POST", `/leagues/${L.id}/seasons/${season.id}/divisions/${d.id}`, { num_teams: Number(lines.count.value), team_names: lines.names() });
+            close(comp);
+          } catch (e) {
+            err.textContent = e.message;
+            err.classList.remove("hidden");
+          }
+        } }, "Start division"),
+      ], { onClose: (comp) => { if (comp) { toast(`${comp.name} created`); reload(); } } });
+    };
+
+    const seasonsCard = h("div", { class: "card" },
+      h("div", { class: "row between" }, h("h2", { style: { margin: 0 } }, "Seasons"),
+        h("button", { class: "primary", onclick: async () => {
+          const v = await formSheet("New season", [
+            { name: "name", label: "Name", placeholder: "e.g. 2026 or Fall 2026" }, { name: "year", label: "Year", type: "number", value: new Date().getFullYear() },
+            { name: "start_date", label: "Starts", type: "date" }, { name: "end_date", label: "Ends", type: "date" },
+          ], { submitLabel: "Add season" });
+          if (!v) return;
+          await run(() => api("POST", `/leagues/${L.id}/seasons`, v), "Season added");
+          reload();
+        } }, "New season")),
+      L.seasons.length ? h("ul", { class: "card-list", style: { marginTop: "12px" } }, L.seasons.map((season) => h("li", { class: "card" },
+        h("div", { class: "row between" }, h("strong", null, season.name), h("span", { class: "muted small" }, [season.start_date, season.end_date].filter(Boolean).join(" – "))),
+        h("ul", { class: "org-list", style: { marginTop: "8px" } }, L.divisions.map((d) => {
+          const c = (season.divisions.find((x) => x.division_id === d.id) || {}).competition;
+          return h("li", null,
+            h("span", null, h("b", null, `${d.name} division`), c ? h("span", { class: "muted small" }, ` · ${c.teams} teams · ${c.games} games${c.live_games ? ` · ${c.live_games} live` : ""}`) : h("span", { class: "muted small" }, " · not started")),
+            c ? h("div", { class: "row" },
+              h("a", { class: "btn sm", href: `#tournaments/${c.id}`, onclick: () => { selectedTid = c.id; setTimeout(() => mainTabs.set("tournaments"), 0); } }, "Teams, schedule & scoring"),
+              h("a", { class: "btn sm", href: `/tournament?id=${c.id}`, target: "_blank" }, "Public ↗"))
+              : h("button", { class: "sm primary", onclick: () => startDivision(season, d) }, "Start division"));
+        }))))) : h("p", { class: "muted" }, "No seasons yet."));
+
+    const s = (await get(`/leagues/${L.id}/ratings`)).settings;
+    const RATING_FIELDS = [["goal", "Goal"], ["assist", "Assist"], ["shg", "Short-handed goal (extra)"], ["gwg", "Game-winning goal (extra)"], ["ppg", "Power-play goal (extra)"],
+      ["pim", "Per penalty minute (subtract)"], ["recency_decay", "Each older season counts ×"], ["skater_prior_games", "Skater sample-size cushion (games)"],
+      ["goalie_prior_games", "Goalie sample-size cushion (games)"], ["goalie_sv_weight", "Goalies: weight of save % (0–1)"], ["min_games", "Minimum games to be rated"]];
+    const ratingCard = h("div", { class: "card" }, h("h2", null, "Player rating weights"),
+      h("p", { class: "muted small" }, "Production per game = goals × goal weight + assists × assist weight + the extras, then × division strength. Recent seasons count most; the cushion blends in league-average games so small samples don't top the list. Ratings are percentiles (0–100) within the league."),
+      h("form", { class: "form", onsubmit: async (e) => {
+        e.preventDefault();
+        await run(() => api("PUT", `/leagues/${L.id}/rating-settings`, values(e.target)), "Rating weights saved");
+      } }, RATING_FIELDS.map(([k, label]) => field(label, input(k, { type: "number", step: "0.05", value: s[k] }))),
+      h("div", { class: "wide" }, h("button", { class: "primary" }, "Save weights"))));
+
+    mount(body, seasonsCard, divisionsCard, ratingCard);
+  }
+
+  async function newLeague() {
+    const v = await formSheet("New league", [
+      { name: "name", label: "Name", required: true, placeholder: "Metro Beer League" },
+      { name: "short_name", label: "Short name (optional)", placeholder: "Metro" },
+      { name: "divisions", label: "Divisions, strongest first", value: "B, C, D" },
+    ], { submitLabel: "Create league" });
+    if (!v) return;
+    const l = await run(() => api("POST", "/leagues", { name: v.name, short_name: v.short_name, divisions: String(v.divisions || "").split(",").map((x) => x.trim()).filter(Boolean) }), "League created");
+    selectedLeague = l.id;
+    leaguesView();
   }
 
   /** Tournament type: draft (teams drafted fresh) or team (the same teams carry over). */
@@ -1016,10 +1147,17 @@
       : input("hi-series", { required: true, placeholder: "e.g. DEX", maxlength: 30 });
     const year = input("hi-year", { type: "number", min: 1950, max: 2100, value: new Date().getFullYear(), required: true });
     const fmt = select("hi-format", [["draft", "Draft (stats follow players)"], ["team", "Team (teams carry over)"]], "draft");
+    // Or straight into a league division-season.
+    const comps = (await get("/tournaments")).filter((t) => t.kind === "league");
+    const intoSel = select("hi-into", [["", "A tournament (city, type and year below)"], ...comps.map((t) => [t.id, `League: ${t.name}`])], "", {
+      onchange: () => { tournamentFields.classList.toggle("hidden", Boolean(intoSel.value)); checkId(); } });
+    const leagueTarget = () => (intoSel.value ? Number(intoSel.value) : null);
+    let tournamentFields;
     const idBox = h("div", { class: "notice small", "aria-live": "polite" }, "Fill in city, type and year to get the Tournament ID.");
     let idState = null;
     const checkId = debounce(async () => {
       idState = null;
+      if (leagueTarget()) return mount(idBox, "Stats go into ", h("strong", null, comps.find((t) => t.id === leagueTarget()).name), ". A division-season's stats can be uploaded once; uploading again offers to replace them.");
       if (!city.value.trim() || !series.value || !/^\d{4}$/.test(year.value)) return mount(idBox, "Fill in city, type and year to get the Tournament ID.");
       try {
         const r = await get(`/import/tournament-id?city=${encodeURIComponent(city.value.trim())}&series=${encodeURIComponent(series.value)}&year=${year.value}`);
@@ -1053,14 +1191,15 @@
       ], list, { sortKey: "imported_at" }));
     };
     const go = async (dry, replace = false) => {
-      if (!city.value.trim() || !series.value || !/^\d{4}$/.test(year.value)) return toast("Fill in the city, tournament type and year first", true);
+      if (!leagueTarget() && (!city.value.trim() || !series.value || !/^\d{4}$/.test(year.value))) return toast("Fill in the city, tournament type and year first", true);
       if (!dry && !replace && idState && idState.tournament && idState.tournament.uploaded_rows) {
         if (!(await confirmSheet(`${idState.code} already has ${idState.tournament.uploaded_rows} uploaded rows. Replace them with this file? (The earlier upload's rows are removed, so nothing is counted twice.)`,
           { title: "Replace earlier upload", confirmLabel: "Replace" }))) return;
         replace = true;
       }
       const body = importPayload(area.value, { dry_run: dry, source: source.value || undefined, skip_errors: $("#hi-skip").checked, create_missing_players: $("#hi-create").checked,
-        format: fmt.value, city: city.value.trim(), series: series.value, year: Number(year.value), replace: replace || undefined });
+        format: fmt.value, replace: replace || undefined,
+        ...(leagueTarget() ? { tournament_id: leagueTarget() } : { city: city.value.trim(), series: series.value, year: Number(year.value) }) });
       try {
         mount(report, importReport(await api("POST", "/import/historical", body)));
         if (!dry) { loadBatches(); checkId(); }
@@ -1077,7 +1216,8 @@
         h("p", { class: "muted small" },
           "One row per player per season/event. Recognised columns (case-insensitive, common abbreviations OK): name or first_name/last_name, email, external_id, season, event, team, position, GP, G, A, PIM, +/-, PPG, PPA, SHG, SHA, GWG, SOG, HITS, BLK, FOW, FOL; goalies: GP (or GPI), W, L, OTL, T, SA, GA, SV, SO, MIN (minutes or mm:ss)."),
         h("h3", null, "1. Which tournament?"),
-        h("div", { class: "form" }, field("City", city), field("Tournament type", series), field("Year", year), field("Team format (if it's new)", fmt)),
+        comps.length ? h("div", { class: "form" }, field("Upload into", intoSel, "wide")) : "",
+        (tournamentFields = h("div", { class: "form" }, field("City", city), field("Tournament type", series), field("Year", year), field("Team format (if it's new)", fmt))),
         idBox,
         h("h3", null, "2. The stats file"),
         h("div", { class: "row", style: { marginBottom: "8px" } }, fileLoader(area), field("Source label", source)),

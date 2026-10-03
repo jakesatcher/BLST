@@ -129,6 +129,7 @@ function createApp() {
   api.use(require("./routes/importExport"));
   api.use(require("./routes/registrations"));
   api.use(require("./routes/history"));
+  api.use(require("./routes/leagues"));
   api.use(require("./routes/factions"));
   api.use(require("./routes/admin"));
   api.use((_req, _res, next) => next(new HttpError(404, "not found")));
@@ -142,7 +143,7 @@ function createApp() {
   // Pages. An organization's site: /stats, /factions, /admin, … ; the bare
   // domain: the platform (sign in, request an organization, approvals).
   const page = (name) => path.join(__dirname, "..", "public", `${name}.html`);
-  const ORG_PAGES = /^\/(stats|history|club|factions|admin|scorekeeper|tournament|game|player|watch|overlay|api)(\.html)?\/?$|^\/index\.html$/;
+  const ORG_PAGES = /^\/(stats|league|history|club|factions|admin|scorekeeper|tournament|game|player|watch|overlay|api)(\.html)?\/?$|^\/index\.html$/;
   app.use((req, res, next) => {
     if (req.method !== "GET" && req.method !== "HEAD") return next();
     if (req.orgMissing && (req.path === "/" || ORG_PAGES.test(req.path))) return res.status(404).type("html").send(missingOrgPage(req.orgMissing));
