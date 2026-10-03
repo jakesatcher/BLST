@@ -35,6 +35,7 @@ async function main() {
   setInterval(pruneAuth, 3600e3).unref();
   webhooks.start();
   factions.start();
+  require("./services/sportsengine").start();
   leagueapps.startSchedule();
   const rearmed = await control.rearmAll();
   // Keep the audit trail for 180 days.

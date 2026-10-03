@@ -130,6 +130,7 @@ function createApp() {
   api.use(require("./routes/registrations"));
   api.use(require("./routes/history"));
   api.use(require("./routes/leagues"));
+  api.use(require("./routes/sportsengine"));
   api.use(require("./routes/factions"));
   api.use(require("./routes/admin"));
   api.use((_req, _res, next) => next(new HttpError(404, "not found")));

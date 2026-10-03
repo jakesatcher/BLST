@@ -129,6 +129,8 @@ tr.voided td { text-decoration: line-through; color: var(--muted); }
 .badge.live { background: var(--live); color: #fff; border-color: var(--live); }
 .badge.final { color: var(--text); }
 .badge.pp { background: var(--warn); border-color: var(--warn); color: #111; }
+.badge.danger { background: var(--danger); border-color: var(--danger); color: #fff; }
+.danger-text { color: var(--danger); }
 .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--muted); margin-right: 6px; vertical-align: 1px; }
 .pulse { animation: pulse 1.6s infinite; }
 @keyframes pulse { 50% { opacity: 0.35; } }

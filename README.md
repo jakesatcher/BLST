@@ -225,6 +225,21 @@ The sync is incremental and safe to repeat.
 
 > The sign-in and export calls follow LeagueApps' official sample (`registrations-2`, `last-updated`/`last-id` paging, JWT sign-in). LeagueApps doesn't publish the registration record's field names, so use **Check field mapping** once with your real account before the first tournament.
 
+## SportsEngine
+
+**Admin → Integrations → SportsEngine** connects an organization to its SportsEngine account (each organization connects its own):
+
+1. In SportsEngine, create an API client for your organization and authorize it for the organization. You get a **client ID** and **client secret**.
+2. Enter both under Integrations and press **Connect**. BLST signs in (OAuth client credentials) and lists the SportsEngine organizations the client can see; with more than one, choose which. The secret and access tokens are stored encrypted (AES-256-GCM with a key from `AUTH_SECRET`), and only an admin signed in with their account can change them.
+3. Pick a tournament or league division under **Sync**, then:
+   - **Import teams and rosters**: each ticked SportsEngine team becomes the BLST team with the same name (added if missing). Its roster comes in with jersey numbers. Players are matched by email, then name and birth date, then name (doubtful matches are listed to check); anyone new is added. Run it again to pick up roster changes; nothing is duplicated.
+   - **Import schedule**: SportsEngine games between the linked teams become BLST games, with time, rink, and home and away. Re-running updates games not yet started.
+   - **Games and results**: when a SportsEngine game goes final in BLST, its score is sent back to the SportsEngine event automatically (switch this off on the connection). **Send** re-sends a score after a correction.
+
+The stats themselves (goals, assists, saves …) come from BLST's live scoring, so imported games feed tournament, league, history and rating stats like any other game. Every sync is in the **Activity** log.
+
+> The integration uses SportsEngine's GraphQL API (`https://api.sportsengine.com/graphql`, tokens from `https://user.sportsengine.com/oauth/token`). All GraphQL documents are in `QUERIES` in `src/services/sportsengine.js`. The field names come from SportsEngine's help articles and haven't been checked against a live account. Test with your account first; if a call fails, the Activity log shows SportsEngine's error message. The score mutation can be replaced without a code change with `SPORTSENGINE_SCORE_MUTATION`.
+
 ## Live video with a score overlay (LiveBarn)
 
 Every game has a **▶ Watch** page (`/watch.html?game=N`) that shows the video with a broadcast-style score overlay drawn on top.

@@ -344,5 +344,5 @@ async function mergePlayers(keepId, removeId) {
 
 module.exports = {
   nameKey, cleanEmail, cleanDate, derivePrefix, normalizePerson, matchPlayer, playerHistory, upsertRegistration,
-  registerOne, listRegistrations, lookup, mergePlayers,
+  registerOne, listRegistrations, lookup, mergePlayers, createPlayer, enrichPlayer,
 };

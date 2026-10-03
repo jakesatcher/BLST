@@ -101,7 +101,7 @@
   await BLST.ready;
   const factionsOn = Boolean(BLST.org && BLST.org.factions_enabled);
   const view = h("div");
-  const tabNames = [["tournaments", "Tournaments"], ["leagues", "Leagues"], ["players", "Players"], ["history", "History"], ["org", "Organization"], ["keys", "API keys"], ["webhooks", "Webhooks"],
+  const tabNames = [["tournaments", "Tournaments"], ["leagues", "Leagues"], ["players", "Players"], ["history", "History"], ["org", "Organization"], ["keys", "API keys"], ["webhooks", "Webhooks"], ["integrations", "Integrations"],
     ...(factionsOn ? [["factions", "Factions"]] : []), ["security", "Security"]];
   let firstTab = location.hash.slice(1).split("/")[0] || "tournaments";
   if (firstTab === "accounts") firstTab = "org";
@@ -113,7 +113,7 @@
     mainTabs.el, view);
 
   function show(tab) {
-    const fn = { tournaments: tournamentsView, players: playersView, history: historyView, leagues: leaguesView, org: orgView, keys: keysView, webhooks: webhooksView, factions: factionsGlobalView, security: securityView }[tab];
+    const fn = { tournaments: tournamentsView, players: playersView, history: historyView, leagues: leaguesView, org: orgView, keys: keysView, webhooks: webhooksView, integrations: integrationsView, factions: factionsGlobalView, security: securityView }[tab];
     mount(view, h("p", { class: "muted" }, "Loading…"));
     fn().catch((err) => mount(view, h("p", { class: "notice error" }, err.message)));
   }
@@ -1548,6 +1548,118 @@
         { key: "id", label: "ID", num: true }, { key: "event", label: "Event" }, { key: "status", label: "Status" }, { key: "attempts", label: "Tries", num: true },
         { key: "response_code", label: "HTTP", num: true }, { key: "error", label: "Error" }, { key: "created_at", label: "At", fmt: (d) => fmtDate(d.created_at) },
       ], list, { sortKey: "id" })));
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Integrations: SportsEngine
+
+  async function integrationsView(keepTid, notice) {
+    const st = await get("/integrations/sportsengine");
+    const work = h("div");
+    const connectForm = (orgs) => h("form", { class: "form", onsubmit: async (e) => {
+      e.preventDefault();
+      const v = values(e.target);
+      const r = await run(() => api("PUT", "/integrations/sportsengine", {
+        client_id: v.client_id, client_secret: v.client_secret || undefined, se_organization_id: v.se_organization_id || undefined, auto_push: e.target.auto_push.checked,
+      }), "SportsEngine connected");
+      await integrationsView();
+      if (!r.se_organization_id && r.organizations.length > 1) toast("Choose which SportsEngine organization to use", true);
+    } },
+      field("Client ID", input("client_id", { required: true, value: st.client_id || "", autocomplete: "off" })),
+      field(st.connected ? "Client secret (blank = keep)" : "Client secret", input("client_secret", { type: "password", required: !st.connected, autocomplete: "new-password" })),
+      orgs && orgs.length ? field("SportsEngine organization", select("se_organization_id", [["", "— choose —"], ...orgs.map((o) => [o.id, o.name])], st.se_organization_id || ""))
+        : field("SportsEngine organization ID (blank = the only one you can see)", input("se_organization_id", { value: st.se_organization_id || "" })),
+      h("label", { class: "inline" }, h("input", { type: "checkbox", name: "auto_push", checked: st.connected ? st.auto_push : true }), "Send final scores to SportsEngine automatically"),
+      h("div", null, h("button", { class: "primary" }, st.connected ? "Save and test" : "Connect")));
+
+    const head = h("div", { class: "card" },
+      h("div", { class: "row between" }, h("h2", { style: { margin: 0 } }, "SportsEngine"),
+        st.connected ? h("span", { class: `badge ${st.last_error ? "danger" : ""}` }, st.last_error ? "Error" : "Connected") : h("span", { class: "badge" }, "Not connected")),
+      h("p", { class: "muted small" }, "Brings teams, rosters and game schedules in from SportsEngine and sends final scores back. In SportsEngine, create an API client for your organization (SportsEngine → Developer / API settings) and enter its client ID and secret here. The secret is stored encrypted."),
+      st.connected ? h("p", null, "Organization: ", h("strong", null, st.se_organization_name || st.se_organization_id || "— not chosen —"),
+        ` · linked ${st.linked.teams} teams, ${st.linked.players} players, ${st.linked.games} games`, st.last_sync_at ? ` · last sync ${fmtDate(st.last_sync_at)}` : "") : "",
+      st.last_error ? h("p", { class: "notice error" }, st.last_error) : "",
+      connectForm(null),
+      st.connected ? h("div", { class: "row", style: { marginTop: "8px" } },
+        h("button", { class: "sm", onclick: async () => mount(work, connectForm((await run(() => api("PUT", "/integrations/sportsengine", { client_id: st.client_id }))).organizations)) }, "Choose organization…"),
+        h("button", { class: "sm danger", onclick: async () => {
+          if (await confirmSheet("Disconnect SportsEngine? Links between SportsEngine and BLST teams, players and games are kept for a reconnect.", { title: "Disconnect", confirmLabel: "Disconnect", danger: true })) {
+            await run(() => api("DELETE", "/integrations/sportsengine"), "Disconnected");
+            integrationsView();
+          }
+        } }, "Disconnect")) : "");
+
+    if (!st.connected) return mount(view, head);
+
+    const list = await get("/tournaments");
+    const tBox = h("div");
+    const pick = select("se-t", [["", "Choose a tournament or league division…"], ...list.map((t) => [t.id, `${t.name}${t.season ? ` (${t.season})` : ""}`])], keepTid || "", {
+      onchange: (e) => (e.target.value ? tournamentSync(Number(e.target.value)) : mount(tBox)),
+    });
+    async function tournamentSync(tid) {
+      mount(tBox, h("p", { class: "muted" }, "Loading SportsEngine teams…"));
+      let seTeams;
+      try {
+        seTeams = await get("/integrations/sportsengine/teams");
+      } catch (err) {
+        return mount(tBox, h("p", { class: "notice error" }, err.message));
+      }
+      const links = await get(`/tournaments/${tid}/sportsengine`);
+      const report = h("div");
+      const boxes = seTeams.map((t) => ({ t, cb: h("input", { type: "checkbox", value: t.id, checked: Boolean(t.linked && t.linked.tournament_id === tid) }) }));
+      const today = new Date().toISOString().slice(0, 10);
+      const later = new Date(Date.now() + 180 * 864e5).toISOString().slice(0, 10);
+      mount(tBox,
+        h("div", { class: "card" }, h("h2", null, "Teams and rosters"),
+          h("p", { class: "muted small" }, "Each team comes in under its SportsEngine name (an existing team with the same name is used). Players are matched by email, then name and birth date, then name; new ones are added. Run it again any time to pick up roster changes."),
+          seTeams.length ? h("div", { class: "stack" }, boxes.map(({ t, cb }) => h("label", { class: "inline" }, cb, h("strong", null, t.name),
+            t.program ? h("span", { class: "muted small" }, t.program) : "",
+            t.linked ? h("span", { class: "muted small" }, `→ ${t.linked.team} (${t.linked.tournament})`) : ""))) : h("p", { class: "muted" }, "No teams found in this SportsEngine organization."),
+          h("div", { class: "row", style: { marginTop: "8px" } }, h("button", { class: "primary", onclick: async () => {
+            const ids = boxes.filter((b) => b.cb.checked).map((b) => b.t.id);
+            if (!ids.length) return toast("Tick at least one team", true);
+            const r = await run(() => api("POST", `/tournaments/${tid}/sportsengine/teams`, { team_ids: ids }));
+            await integrationsView(tid, h("div", { class: `notice ${r.errors.length ? "error" : ""}` },
+              `${r.teams} teams (${r.created_teams} new) · ${r.players} players (${r.created_players} new)${r.moved ? ` · ${r.moved} moved` : ""}`,
+              r.review.length ? h("div", { class: "small" }, "Check these matches: ", r.review.join("; ")) : "",
+              r.errors.length ? h("ul", { class: "small" }, r.errors.map((x) => h("li", null, x))) : ""));
+          } }, "Import teams and rosters"))),
+        h("div", { class: "card" }, h("h2", null, "Schedule"),
+          h("p", { class: "muted small" }, "SportsEngine games between this competition's linked teams become BLST games (time, rink, home and away). Games already started in BLST aren't changed."),
+          h("form", { class: "form", onsubmit: async (e) => {
+            e.preventDefault();
+            const v = values(e.target);
+            const r = await run(() => api("POST", `/tournaments/${tid}/sportsengine/schedule`, { start: v.start, end: v.end }));
+            await integrationsView(tid, h("div", { class: "notice" }, `${r.created} new games, ${r.updated} updated${r.skipped ? `, ${r.skipped} already underway` : ""} (${r.seen} SportsEngine events looked at)`));
+          } },
+            field("From", input("start", { type: "date", value: today })),
+            field("To", input("end", { type: "date", value: later })),
+            h("div", null, h("button", { class: links.teams.length < 2 ? "" : "primary", disabled: links.teams.length < 2 }, "Import schedule")),
+            links.teams.length < 2 ? h("p", { class: "muted small" }, "Import at least two teams first.") : "")),
+        h("div", { class: "card" }, h("h2", null, "Games and results"),
+          h("p", { class: "muted small" }, st.auto_push ? "Final scores are sent to SportsEngine automatically when a game ends. Use Send to send one again (after a correction)." : "Automatic sending is off: use Send for each final game."),
+          links.games.length ? table([
+            { key: "scheduled_at", label: "When", fmt: (g) => (g.scheduled_at ? fmtDate(g.scheduled_at) : "—") },
+            { key: "home", label: "Game", fmt: (g) => `${g.home} vs ${g.away}` },
+            { key: "status", label: "Status", fmt: (g) => (g.status === "final" ? `Final ${g.home_score}-${g.away_score}` : g.status) },
+            { key: "pushed_at", label: "Sent", fmt: (g) => (g.pushed_at ? `${g.pushed_score} · ${fmtDate(g.pushed_at)}` : "—") },
+            { key: "x", label: "", sort: false, fmt: (g) => (g.status === "final" ? h("button", { class: "sm", onclick: async () => {
+              await run(() => api("POST", `/games/${g.game_id}/sportsengine/result`, {}), "Score sent to SportsEngine");
+              integrationsView(tid);
+            } }, "Send") : "") },
+          ], links.games) : h("p", { class: "muted" }, "No SportsEngine games in this competition yet.")));
+    }
+
+    mount(view, head, work,
+      h("div", { class: "card" }, h("h2", null, "Sync a tournament or league division"), field("Into", pick)), tBox,
+      h("div", { class: "card" }, h("h2", null, "Activity"), st.log.length ? table([
+        { key: "at", label: "At", fmt: (l) => fmtDate(l.at) }, { key: "action", label: "What" },
+        { key: "ok", label: "", fmt: (l) => (l.ok ? "✓" : h("span", { class: "danger-text" }, "✕")) }, { key: "message", label: "Details" },
+      ], st.log, { sortKey: "at" }) : h("p", { class: "muted" }, "Nothing yet.")));
+    if (keepTid) {
+      await tournamentSync(keepTid);
+      if (notice) tBox.prepend(notice);
     }
   }
 
