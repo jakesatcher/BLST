@@ -97,3 +97,61 @@ router.post("/admin/identity/emails", admin, async (req, res) => {
 });
 
 module.exports = router;
+
+// ---------------------------------------------------------------------------
+// Stats page: all-time leaders and the organization's awards
+
+/** All-time leaders (imported history + every BLST game). Goalie rates need half the leader's games. */
+router.get("/leaders", async (req, res) => {
+  const limit = optInt(req.query.limit, "limit", { min: 1, max: 25 }) || 5;
+  const rows = await history.allTime();
+  const line = (r, value, gp) => ({ player_id: r.player_id, name: r.name, position: r.position, gp, value });
+  const top = (list, value, gp, dir = -1) => list
+    .filter((r) => value(r) != null && gp(r) > 0)
+    .sort((a, b) => dir * (value(a) - value(b)) || gp(b) - gp(a) || a.name.localeCompare(b.name))
+    .slice(0, limit)
+    .map((r) => line(r, value(r), gp(r)));
+  const skaters = rows.filter((r) => r.skater.gp > 0);
+  const goalies = rows.filter((r) => r.goalie.gp > 0);
+  const minGp = Math.max(1, Math.floor(Math.max(0, ...goalies.map((g) => g.goalie.gp)) / 2));
+  const qualified = goalies.filter((g) => g.goalie.gp >= minGp);
+  res.json({
+    scope: "all-time",
+    goals: top(skaters.filter((r) => r.skater.goals > 0), (r) => r.skater.goals, (r) => r.skater.gp),
+    assists: top(skaters.filter((r) => r.skater.assists > 0), (r) => r.skater.assists, (r) => r.skater.gp),
+    pim: top(skaters.filter((r) => r.skater.pim > 0), (r) => r.skater.pim, (r) => r.skater.gp),
+    save_pct: top(qualified, (r) => r.goalie.save_pct, (r) => r.goalie.gp),
+    gaa: top(qualified, (r) => r.goalie.gaa, (r) => r.goalie.gp, 1),
+    wins: top(goalies.filter((r) => r.goalie.wins > 0), (r) => r.goalie.wins, (r) => r.goalie.gp),
+    goalie_min_gp: minGp,
+  });
+});
+
+/** The organization's awards, with the winner's player page when the name matches a player. */
+async function awardsWithPlayers(org) {
+  const db = require("../db");
+  const row = await db.one("SELECT awards FROM organizations WHERE id = $1", [org.id]);
+  const awards = (row && row.awards) || [];
+  return Promise.all(awards.map(async (a) => {
+    const [first, ...rest] = String(a.name || "").trim().split(/\s+/);
+    const p = first && rest.length ? await db.one(
+      "SELECT id FROM players WHERE lower(first_name) = lower($1) AND lower(last_name) = lower($2) ORDER BY id LIMIT 1", [first, rest.join(" ")]) : null;
+    return { title: a.title, name: a.name, note: a.note || null, player_id: p ? p.id : null };
+  }));
+}
+
+router.get("/awards", async (req, res) => res.json(await awardsWithPlayers(req.org)));
+
+/** [{ title, name, note? }] — up to 12. */
+router.put("/admin/awards", require("../middleware/auth").requireInteractiveAdmin, async (req, res) => {
+  const list = req.body.awards;
+  if (!Array.isArray(list) || list.length > 12) throw badRequest("awards must be a list (at most 12)");
+  const clean = list.map((a, i) => {
+    const title = optString(a && a.title, `awards[${i}].title`, { max: 60 });
+    const name = optString(a && a.name, `awards[${i}].name`, { max: 80 });
+    if (!title || !name) throw badRequest("each award needs a title and a name");
+    return { title, name, ...(a.note ? { note: optString(a.note, `awards[${i}].note`, { max: 140 }) } : {}) };
+  });
+  await require("../db").query("UPDATE organizations SET awards = $2, updated_at = now() WHERE id = $1", [req.org.id, JSON.stringify(clean)]);
+  res.json(await awardsWithPlayers(req.org));
+});

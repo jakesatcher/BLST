@@ -1276,7 +1276,33 @@
     const typesBox = h("div");
     view.insertBefore(typesBox, factionsBox);
     tournamentTypesCard(typesBox);
+    const awardsBox = h("div");
+    view.insertBefore(awardsBox, factionsBox);
+    awardsCard(awardsBox);
     await Promise.all([factionsSetup(factionsBox), peopleView(peopleBox)]);
+  }
+
+  /** Awards on the stats page (and the winner's player page). */
+  async function awardsCard(el) {
+    let list = (await get("/awards")).map((a) => ({ title: a.title, name: a.name, note: a.note || "" }));
+    const draw = () => mount(el, h("div", { class: "card" },
+      h("h2", null, "Awards"),
+      h("p", { class: "muted small" }, "Shown at the top of the stats page and on the player's page. The player is found by name."),
+      h("div", { class: "stack" }, list.map((a, i) => h("div", { class: "form" },
+        h("label", null, "Award", h("input", { value: a.title, maxlength: 60, placeholder: "e.g. Heel of the Year", oninput: (e) => { a.title = e.target.value; } })),
+        h("label", null, "Player", h("input", { value: a.name, maxlength: 80, placeholder: "First Last", oninput: (e) => { a.name = e.target.value; } })),
+        h("label", null, "Note (optional)", h("input", { value: a.note, maxlength: 140, oninput: (e) => { a.note = e.target.value; } })),
+        h("div", null, h("button", { class: "sm danger", type: "button", onclick: () => { list.splice(i, 1); draw(); } }, "Remove"))))),
+      h("div", { class: "row", style: { marginTop: "10px" } },
+        h("button", { type: "button", onclick: () => { list.push({ title: "", name: "", note: "" }); draw(); } }, "Add award"),
+        h("button", { class: "primary", type: "button", onclick: async () => {
+          const saved = await run(() => api("PUT", "/admin/awards", { awards: list.filter((a) => a.title.trim() || a.name.trim()).map((a) => ({ title: a.title.trim(), name: a.name.trim(), note: a.note.trim() || undefined })) }), "Awards saved");
+          list = saved.map((a) => ({ title: a.title, name: a.name, note: a.note || "" }));
+          const unknown = saved.filter((a) => !a.player_id).map((a) => a.name);
+          if (unknown.length) toast(`No player named ${unknown.join(", ")} yet; the award shows without a link until there is.`);
+          draw();
+        } }, "Save"))));
+    draw();
   }
 
   /** The organization's tournament types (event series): part of every Tournament ID. */

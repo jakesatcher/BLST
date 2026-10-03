@@ -5,7 +5,8 @@
   await BLST.ready;
   const id = Number(param("id"));
   if (!id) return mount(app, h("p", { class: "notice error" }, "Missing player id"));
-  const [c, full] = await Promise.all([get(`/players/${id}/career`), get(`/players/${id}`)]);
+  const [c, full, awards] = await Promise.all([get(`/players/${id}/career`), get(`/players/${id}`), get("/awards").catch(() => [])]);
+  const mine = awards.filter((a) => String(a.player_id) === String(id));
   const p = c.player;
   document.title = `${p.first_name} ${p.last_name} · ${BLST.org ? BLST.org.name : "BLST"}`;
   const isGoalie = p.position === "G" || c.career.goalie.gp > 0;
@@ -26,6 +27,8 @@
   mount(app,
     h("div", { class: "row", style: { gap: "12px" } }, h("h1", { style: { margin: 0 } }, `${p.first_name} ${p.last_name}`)),
     h("p", { class: "muted" }, [p.position, p.shoots ? `Shoots ${p.shoots}` : null].filter(Boolean).join(" · ")),
+    mine.length ? h("div", { class: "awards" }, mine.map((a) => h("div", { class: "card award-card" },
+      h("div", { class: "award-title" }, a.title), h("div", { class: "award-name" }, a.name), a.note ? h("div", { class: "muted small" }, a.note) : ""))) : "",
     h("div", { class: "grid three" },
       h("div", { class: "card" }, h("h3", null, "Career (skater)"), h("dl", { class: "kv" },
         h("dt", null, "GP"), h("dd", null, sk.gp), h("dt", null, "Goals"), h("dd", null, sk.goals), h("dt", null, "Assists"), h("dd", null, sk.assists),

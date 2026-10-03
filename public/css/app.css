@@ -522,3 +522,12 @@ button.link { background: none; border: 0; padding: 6px 0; color: var(--accent);
   .map-table td:last-child { width: 55%; }
   .map-table select { width: 100%; }
 }
+
+/* Stats page: awards and leader groups */
+.awards { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); margin-bottom: 18px; }
+.award-card { margin: 0; border-left: 5px solid #c9a227; background: linear-gradient(135deg, rgba(201, 162, 39, 0.14), transparent 60%), var(--surface); }
+.award-title { font-size: 0.75rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: #a8861a; }
+.award-title::before { content: "🏆 "; }
+.award-name { font-size: 1.5rem; font-weight: 800; margin-top: 2px; }
+.award-name a { color: inherit; }
+.leaders-group { margin: 14px 0 6px; color: var(--muted); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.06em; }

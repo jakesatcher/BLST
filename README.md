@@ -143,6 +143,11 @@ heroku open
 
 The `Procfile` runs migrations in the release phase. TLS to Heroku Postgres is turned on automatically, and the app refuses to boot on Heroku without `ADMIN_TOKEN` until an admin account exists. Run **one web dyno**: live updates fan out in memory. Before scaling out, move the event bus in `src/lib/bus.js` to Postgres LISTEN/NOTIFY.
 
+## Stats page
+
+- **Stat leaders:** the top five in **goals**, **assists** and **penalty minutes**, plus goalie panels for **save %**, **goals-against average** and **wins**. The default is all-time (every BLST game plus imported history); a picker switches to any tournament or league season-division. Save % and GAA count goalies with at least half the leader's games.
+- **Awards:** shown at the top of the stats page and on the winner's player page. Set them under Admin → Organization → **Awards** (award, player name, optional note). BLPA's starts with **Heel of the Year: Nick Fleehart**. The name links to his player page once a player with that name exists.
+
 ## History across tournaments
 
 - **Players:** a player is one record for life, so their stats follow them from team to team. In **draft tournaments** (teams reshuffled each time) that's the history that matters: `/history` shows everyone's all-time totals, and each player's page lists every tournament with the team they were on.
