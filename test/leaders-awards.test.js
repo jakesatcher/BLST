@@ -21,10 +21,10 @@ test.after(async () => {
 });
 
 test("BLPA always shows Nick Fleehart as Heel of the Year, linked once he's a player", async () => {
-  let awards = (await api("GET", "/awards", undefined, null)).body;
+  let awards = (await api("GET", "/awards", undefined, ctx.viewer)).body;
   assert.deepEqual(awards, [{ title: "Heel of the Year", name: "Nick Fleehart", note: null, player_id: null }]);
   S.nick = (await api("POST", "/players", { first_name: "Nick", last_name: "Fleehart" })).body.id;
-  awards = (await api("GET", "/awards", undefined, null)).body;
+  awards = (await api("GET", "/awards", undefined, ctx.viewer)).body;
   assert.equal(awards[0].player_id, S.nick);
 });
 
@@ -62,7 +62,7 @@ test("all-time leaders: goals, assists, PIM and goalie panels from games and imp
   const imp = await api("POST", "/import/historical", { city: "Pittsburgh", series: "DEX", year: 2024, rows: [{ name: "Bob Brute", gp: 10, g: 4, a: 9, pim: 30 }] });
   assert.equal(imp.status, 200, JSON.stringify(imp.body));
 
-  const l = (await api("GET", "/leaders", undefined, null)).body;
+  const l = (await api("GET", "/leaders", undefined, ctx.viewer)).body;
   assert.deepEqual(l.goals.map((x) => [x.name, x.value]), [["Bob Brute", 4], ["Amy Ace", 2]]);
   assert.deepEqual(l.assists.map((x) => [x.name, x.value]), [["Bob Brute", 9], ["Nick Fleehart", 1]]);
   assert.deepEqual(l.pim.map((x) => [x.name, x.value]), [["Bob Brute", 32], ["Nick Fleehart", 5]]);
@@ -74,7 +74,7 @@ test("all-time leaders: goals, assists, PIM and goalie panels from games and imp
   assert.equal(l.gaa[1].name, "Hal Hands", "lower GAA first");
   assert.ok(l.save_pct.some((x) => x.name === "Hal Hands"));
   // One tournament's leaders (the stats page's scope picker) use the tournament endpoint.
-  const tl = (await api("GET", `/tournaments/${t.id}/leaders`, undefined, null)).body;
+  const tl = (await api("GET", `/tournaments/${t.id}/leaders`, undefined, ctx.viewer)).body;
   assert.equal(tl.goals[0].name, "Amy Ace");
   assert.equal(tl.pim[0].value, 5);
 });

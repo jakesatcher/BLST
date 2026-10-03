@@ -222,7 +222,10 @@ test("registration codes flow into the draft sheet and roster upload; PII stays 
   const north = (await api("GET", `/tournaments/${S.fall}/teams`)).body.find((t) => t.name === "North");
   assert.equal(north.roster[0].first_name, "Sam");
 
-  const pub = await (await fetch(`${ctx.base}/api/v1/players/${S.sam.player_id}`)).json();
+  const pubRes = await fetch(`${ctx.base}/api/v1/players/${S.sam.player_id}`, { headers: { authorization: `Bearer ${ctx.viewer}` } });
+  assert.equal(pubRes.status, 200);
+  const pub = await pubRes.json();
+  assert.equal(pub.first_name, "Sam");
   for (const k of ["email", "birth_date", "leagueapps_user_id", "factions_player_id"]) assert.equal(pub[k], undefined, `${k} is private`);
 });
 

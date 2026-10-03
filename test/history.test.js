@@ -264,7 +264,7 @@ test("games have officials of record, any number of each", async () => {
   const put = await api("PUT", `/games/${g.id}/officials`, { officials: list });
   assert.equal(put.status, 200, JSON.stringify(put.body));
   assert.equal(put.body.length, 5, "blank names are dropped");
-  assert.deepEqual((await api("GET", `/games/${g.id}/officials`, undefined, null)).body.map((o) => o.name), ["Ref One", "Ref Two", "Lin", "Sco One", "Sco Two"]);
+  assert.deepEqual((await api("GET", `/games/${g.id}/officials`, undefined, ctx.viewer)).body.map((o) => o.name), ["Ref One", "Ref Two", "Lin", "Sco One", "Sco Two"]);
   assert.equal((await api("GET", `/games/${g.id}`)).body.officials.length, 5, "in the live game snapshot");
   assert.equal((await api("PUT", `/games/${g.id}/officials`, { officials: [{ role: "coach", name: "X" }] })).status, 400);
   assert.equal((await api("PUT", `/games/${g.id}/officials`, { officials: [] }, null)).status, 401);

@@ -188,7 +188,7 @@ test("platform admin setup: setup key, emailed code, then an authenticator befor
 
   // No admin access until a second factor is set up.
   let me = (await call("GET", "/me", { token: first })).body;
-  assert.equal(me.role, "user");
+  assert.equal(me.role, "readonly", "can view the league, nothing more");
   assert.equal(me.mfa_required, true);
   assert.equal(me.platform_admin, false);
   assert.equal((await call("POST", "/tournaments", { token: first, body: { name: "x" } })).status, 403);
@@ -291,14 +291,14 @@ test("organization admins give people access by email; staff need a second facto
   assert.equal(add.body.added, true);
   // Scorekeeper access waits for a second factor.
   let me = (await call("GET", "/me", { token: sk.token })).body;
-  assert.equal(me.role, "user");
+  assert.equal(me.role, "readonly", "can view, not score, until then");
   assert.equal(me.mfa_required, true);
   await enroll(sk.token, "rink@example.com");
   me = (await call("GET", "/me", { token: sk.token })).body;
   assert.equal(me.role, "scorekeeper");
   assert.equal(me.tournament_id, t.body.id);
-  const teams = (await call("GET", `/tournaments/${t.body.id}`)).body.teams;
-  const teams2 = (await call("GET", `/tournaments/${t2.body.id}`)).body.teams;
+  const teams = (await call("GET", `/tournaments/${t.body.id}`, { token: boss })).body.teams;
+  const teams2 = (await call("GET", `/tournaments/${t2.body.id}`, { token: boss })).body.teams;
   const g = await call("POST", `/tournaments/${t.body.id}/games`, { token: boss, body: { home_team_id: teams[0].id, away_team_id: teams[1].id } });
   const g2 = await call("POST", `/tournaments/${t2.body.id}/games`, { token: boss, body: { home_team_id: teams2[0].id, away_team_id: teams2[1].id } });
   assert.equal((await call("POST", `/games/${g.body.id}/start`, { token: sk.token })).status, 200);

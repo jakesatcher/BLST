@@ -22,8 +22,10 @@ test.after(async () => {
 
 const S = {}; // shared state across the ordered subtests below
 
-test("auth: reads are public, writes need a key, roles are enforced", async () => {
-  assert.equal((await api("GET", "/tournaments", undefined, null)).status, 200);
+test("auth: reads need signing in (or a view key), writes need staff, roles are enforced", async () => {
+  assert.equal((await api("GET", "/tournaments", undefined, null)).status, 401, "a league's data needs signing in");
+  assert.equal((await api("GET", "/tournaments", undefined, ctx.viewer)).status, 200, "a viewer can read");
+  assert.equal((await api("POST", "/tournaments", { name: "x" }, ctx.viewer)).status, 403, "…but not change anything");
   assert.equal((await api("POST", "/tournaments", { name: "x" }, null)).status, 401);
   assert.equal((await api("POST", "/tournaments", { name: "x" }, "wrong")).status, 401);
 
@@ -100,11 +102,11 @@ test("roster import creates players and assigns numbers", async () => {
 });
 
 test("players: private fields only for admins", async () => {
-  const pub = await api("GET", `/players/${S.p.Sam}`, undefined, null);
+  const pub = await api("GET", `/players/${S.p.Sam}`, undefined, ctx.viewer);
   assert.equal(pub.body.email, undefined);
   const priv = await api("GET", `/players/${S.p.Sam}`);
   assert.equal(priv.body.email, "sam@example.com");
-  const search = await api("GET", "/players?q=snip", undefined, null);
+  const search = await api("GET", "/players?q=snip", undefined, ctx.viewer);
   assert.equal(search.body.length, 1);
 });
 
@@ -221,7 +223,7 @@ test("tied games need OT unless ties are allowed", async () => {
 });
 
 test("standings, stats and leaders", async () => {
-  const standings = (await api("GET", `/tournaments/${S.tid}/standings`, undefined, null)).body;
+  const standings = (await api("GET", `/tournaments/${S.tid}/standings`, undefined, ctx.viewer)).body;
   const wolves = standings.find((s) => s.team_id === S.home);
   const bears = standings.find((s) => s.team_id === S.away);
   assert.deepEqual([wolves.w, wolves.l, wolves.otl, wolves.pts], [1, 0, 1, 3]);
@@ -285,21 +287,21 @@ test("historical import and career totals", async () => {
 });
 
 test("export API: JSON and CSV", async () => {
-  const full = await api("GET", `/export/tournaments/${S.tid}`, undefined, null);
+  const full = await api("GET", `/export/tournaments/${S.tid}`, undefined, ctx.viewer);
   assert.equal(full.status, 200);
   assert.equal(full.body.schema_version, 1);
   assert.equal(full.body.teams.length, 2);
   assert.ok(full.body.skaters.length > 0);
   assert.ok(!JSON.stringify(full.body).includes("@example.com"), "no emails in exports");
 
-  const csv = await api("GET", `/export/tournaments/${S.tid}/skaters?format=csv`, undefined, null);
+  const csv = await api("GET", `/export/tournaments/${S.tid}/skaters?format=csv`, undefined, ctx.viewer);
   assert.match(csv.headers.get("content-type"), /text\/csv/);
   assert.match(csv.body, /^player_id,name,/);
   assert.match(csv.body, /Sam Sniper/);
 
-  const game = await api("GET", `/export/games/${S.gid}?format=csv`, undefined, null);
+  const game = await api("GET", `/export/games/${S.gid}?format=csv`, undefined, ctx.viewer);
   assert.match(game.body, /goal/);
-  const player = await api("GET", `/export/players/${S.p.Sam}`, undefined, null);
+  const player = await api("GET", `/export/players/${S.p.Sam}`, undefined, ctx.viewer);
   assert.equal(player.body.career.skater.goals, 10);
 });
 
@@ -320,7 +322,7 @@ test("BLPA Factions: players join their Order, tournament points and achievement
   const sam = (await api("GET", `/players/${S.p.Sam}`)).body;
   assert.equal(sam.factions_player_id, Buffer.from("sam@example.com").toString("base64url"));
   assert.equal(sam.factions_order, factions.assignOrder("sam@example.com"));
-  const pubSam = (await api("GET", `/players/${S.p.Sam}`, undefined, null)).body;
+  const pubSam = (await api("GET", `/players/${S.p.Sam}`, undefined, ctx.viewer)).body;
   assert.equal(pubSam.factions_player_id, undefined, "member id is PII");
   assert.equal(pubSam.factions_order, undefined, "Factions is a separate section: not part of public player records");
   assert.equal(pubSam.factions, undefined);
@@ -367,11 +369,11 @@ test("BLPA Factions: players join their Order, tournament points and achievement
   await api("PATCH", `/teams/${S.home}`, { final_placement: 1 });
   await api("POST", `/tournaments/${S.tid}/factions/award`);
 
-  const totals = await api("GET", `/tournaments/${S.tid}/factions/order-totals`, undefined, null);
+  const totals = await api("GET", `/tournaments/${S.tid}/factions/order-totals`, undefined, ctx.viewer);
   assert.equal(totals.status, 200);
   assert.equal(totals.body.length, 6);
   assert.equal(totals.body.find((o) => o.slug === sam.factions_order).total_points >= 12, true);
-  const pub = (await api("GET", "/factions", undefined, null)).body;
+  const pub = (await api("GET", "/factions", undefined, ctx.viewer)).body;
   assert.equal(pub.orders.length, 6);
   assert.ok(pub.events.some((e) => e.id === eventId && e.tournament_id === S.tid));
   assert.ok(pub.leaders.some((l) => l.player_id === S.p.Sam));
@@ -380,7 +382,8 @@ test("BLPA Factions: players join their Order, tournament points and achievement
 
 test("SSE stream pushes snapshots to viewers", async () => {
   const ac = new AbortController();
-  const res = await fetch(`${ctx.base}/api/v1/stream?game_id=${S.gid3}`, { signal: ac.signal });
+  assert.equal((await fetch(`${ctx.base}/api/v1/stream?game_id=${S.gid3}`)).status, 401, "no live feed without signing in");
+  const res = await fetch(`${ctx.base}/api/v1/stream?game_id=${S.gid3}`, { signal: ac.signal, headers: { authorization: `Bearer ${ctx.viewer}` } });
   assert.match(res.headers.get("content-type"), /text\/event-stream/);
   const reader = res.body.getReader();
   const decoder = new TextDecoder();

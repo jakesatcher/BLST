@@ -92,7 +92,7 @@ test("queries switch to a least-privilege role automatically; migrations keep th
   assert.equal((await db.one("SELECT current_user AS u")).u, "blst_app_boot");
   await assert.rejects(db.query("CREATE TABLE nope (id int)"), /permission denied/);
   // The app keeps working as the role…
-  assert.equal((await call("GET", "/factions/orders")).status, 200);
+  assert.equal((await call("GET", "/auth/status")).status, 200);
   // …and migrations still run (as the owner).
   await db.migrate({ log: () => {} });
 

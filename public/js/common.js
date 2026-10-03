@@ -1,8 +1,13 @@
 /* Shared client helpers for every BLST page. No framework, no build step. */
 (function () {
   const TOKEN_KEY = "blst.token";
+  // A display link (scorebug overlay, rink TV) carries a view-only key after
+  // the "#": browsers never send that part to the server, and it's used for
+  // this page only, never stored.
+  const linkKey = (/(?:^#|&)key=(blst_[A-Za-z0-9_-]+)/.exec(location.hash) || [])[1] || "";
 
   function getToken() {
+    if (linkKey) return linkKey;
     try {
       return localStorage.getItem(TOKEN_KEY) || "";
     } catch {
@@ -10,6 +15,7 @@
     }
   }
   function setToken(value) {
+    if (linkKey) return;
     try {
       if (value) localStorage.setItem(TOKEN_KEY, value);
       else localStorage.removeItem(TOKEN_KEY);
@@ -117,18 +123,60 @@
   }
 
   /** EventSource wrapper; the browser reconnects on its own after drops. */
+  /**
+   * Server-Sent Events over fetch (EventSource can't send the sign-in
+   * header). Reconnects after a drop, like EventSource; returns { close }.
+   */
   function stream(query, handlers) {
-    const es = new EventSource(`/api/v1/stream?${new URLSearchParams(query)}`);
-    for (const [event, fn] of Object.entries(handlers)) {
-      es.addEventListener(event, (e) => {
+    const url = `/api/v1/stream?${new URLSearchParams(query)}`;
+    let closed = false;
+    let ctrl = null;
+    let retryMs = 3000;
+    const dispatch = (block) => {
+      let event = "message";
+      const data = [];
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event:")) event = line.slice(6).trim();
+        else if (line.startsWith("data:")) data.push(line.slice(5).replace(/^ /, ""));
+        else if (line.startsWith("retry:")) retryMs = Number(line.slice(6)) || retryMs;
+      }
+      if (!data.length || !handlers[event]) return;
+      try {
+        handlers[event](JSON.parse(data.join("\n")));
+      } catch (err) {
+        console.error(err);
+      }
+    };
+    async function connect() {
+      while (!closed) {
+        ctrl = new AbortController();
         try {
-          fn(JSON.parse(e.data));
+          const headers = { accept: "text/event-stream" };
+          const token = getToken();
+          if (token) headers.authorization = `Bearer ${token}`;
+          const res = await fetch(url, { headers, signal: ctrl.signal, cache: "no-store" });
+          if (res.status === 401 || res.status === 403) return; // no access: don't hammer the server
+          if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+          const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+          let buf = "";
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buf += value.replace(/\r\n/g, "\n");
+            let i;
+            while ((i = buf.indexOf("\n\n")) >= 0) {
+              dispatch(buf.slice(0, i));
+              buf = buf.slice(i + 2);
+            }
+          }
         } catch (err) {
-          console.error(err);
+          if (closed) return;
         }
-      });
+        if (!closed) await new Promise((r) => setTimeout(r, retryMs));
+      }
     }
-    return es;
+    connect();
+    return { close() { closed = true; if (ctrl) ctrl.abort(); } };
   }
 
   let toastTimer;
@@ -273,6 +321,7 @@
         .then((me) => {
           if (me.via === "dev-open") return;
           if (!me.role) return signInLink();
+          if (linkKey) return mount(who, "View-only display");
           const label = me.via === "session" ? me.email : me.role;
           mount(who, h("a", { href: "/account", class: active === "account" ? "active" : null, title: me.key_name ? `Signed in with key "${me.key_name}"` : `Signed in (${me.role})` }, label), " · ",
             h("a", { href: "#", onclick: async (e) => {
@@ -341,17 +390,58 @@
   // its factions. Pages `await BLST.ready` before drawing.
   let ORG = null;
   let PLATFORM = null;
+  // Pages with their own sign-in (or none needed); every other league page
+  // is only for the league's people.
+  const SELF_GATED = /^\/(admin|setup|account|scorekeeper|platform|api)(\.html)?\/?$/;
   const ready = (async () => {
     try {
       const r = await get("/org");
       ORG = r.org;
       PLATFORM = r.platform;
-      setFactions(ORG && ORG.factions_enabled ? await get("/factions/definitions") : []);
     } catch {
       /* offline or no organization: pages show their own errors */
     }
+    if (ORG && !SELF_GATED.test(location.pathname)) {
+      const me = await get("/me").catch(() => ({}));
+      if (!me.can_view) {
+        await gate(me);
+        return new Promise(() => {}); // the page itself never loads
+      }
+    }
+    try {
+      setFactions(ORG && ORG.factions_enabled ? await get("/factions/definitions") : []);
+    } catch {
+      /* not part of this league yet, or Factions is off */
+    }
     return { org: ORG, platform: PLATFORM };
   })();
+
+  /** Instead of the page: sign in, or "you're not part of this league". */
+  async function gate(me) {
+    const app = document.getElementById("app");
+    const top = document.getElementById("top") || document.querySelector("header.topbar");
+    if (top) top.replaceWith(topbar(""));
+    const box = h("div");
+    const card = h("div", { class: "card auth-card gate-card" },
+      h("div", { class: "gate-mark", "aria-hidden": "true" }),
+      h("h1", null, ORG.name),
+      me.role
+        ? [h("p", null, `You're signed in as ${me.email || "this account"}, which isn't part of ${ORG.name}.`),
+          h("p", { class: "muted small" }, "Players get in automatically when this email is on their player record. Otherwise, ask one of the league's admins to add you as a viewer."),
+          h("div", { class: "row" }, h("button", { onclick: async () => { await api("POST", "/auth/logout").catch(() => {}); setToken(""); location.reload(); } }, "Sign in with a different email"))]
+        : [h("p", null, "Stats, standings and schedules are for the league's players and staff. Sign in with the email the league has for you."), box]);
+    if (app) mount(app, card);
+    if (me.role) return;
+    if (!window.BLST.signInFlow) return mount(box, h("a", { class: "btn primary", href: `/account?next=${encodeURIComponent(location.pathname + location.search)}` }, "Sign in"));
+    const flow = h("div");
+    const intros = {
+      login: "We'll email you a code to sign in. No password.",
+      signup: "First time? Create your account with the email the league has for you; we'll email you a code.",
+    };
+    const run = (mode) => window.BLST.signInFlow(flow, { mode, intro: intros[mode], onDone: () => location.reload() });
+    mount(box, tabs([["login", "Sign in"], ["signup", "Create account"]], run, "login", { size: "medium" }).el, flow);
+    run("login");
+  }
   /** Small colored pill: "🐺 Varghona". Links to the Factions page unless link === false. */
   function orderBadge(slug, { link = true, big = false, compact = false } = {}) {
     const o = ORDER[slug];

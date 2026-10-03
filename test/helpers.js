@@ -5,6 +5,8 @@ const express = require("express");
 // Point everything at the test database before any src module loads config.
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL || "postgresql://blst:blst@localhost:5432/blst_test";
 process.env.ADMIN_TOKEN = "test-admin-token";
+// Tests talk to 127.0.0.1: serve the first league there.
+process.env.DEFAULT_ORG = process.env.DEFAULT_ORG ?? "blpa";
 process.env.PUBLIC_EXPORTS = "true";
 // Test webhook receivers listen on 127.0.0.1.
 process.env.ALLOW_PRIVATE_NETWORK_URLS = "true";
@@ -68,7 +70,10 @@ async function startApp({ asAppRole = true } = {}) {
     }
     return { status: res.status, body: json, headers: res.headers };
   }
-  return { server, base, api };
+  // A league's data is only for its people: tests that read as a fan use a
+  // view-only key (a member viewer, a player, or a display link).
+  const viewer = (await api("POST", "/admin/api-keys", { name: "test viewer", role: "readonly" })).body.key;
+  return { server, base, api, viewer };
 }
 
 async function startWebhookReceiver() {

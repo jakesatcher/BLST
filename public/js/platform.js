@@ -10,10 +10,10 @@
   const STATUS = { pending: "Waiting for approval", active: "Live", suspended: "Suspended", rejected: "Not approved" };
   const domain = (BLST.platform && BLST.platform.app_domain) || location.host.replace(/^www\./, "");
 
-  const [status, me, leagues] = await Promise.all([
-    get("/auth/status"), get("/me").catch(() => ({})), get("/platform/leagues").catch(() => []),
-  ]);
-  const live = leagues.reduce((a, l) => a + l.live_games, 0);
+  const [status, me] = await Promise.all([get("/auth/status"), get("/me").catch(() => ({}))]);
+  // Nothing about any league is shown before signing in; afterwards, the
+  // leagues this account is part of (staff, viewer or player).
+  const leagues = me.via === "session" ? await get("/platform/orgs/mine").then((l) => l.filter((o) => o.status === "active")).catch(() => []) : [];
   /** "BLPA" → BLPA; "Metro Beer League" → MBL */
   const monogram = (name) => {
     const words = String(name).split(/[\s-]+/).filter(Boolean);
@@ -27,10 +27,7 @@
     h("p", { class: "sub" }, "Live scoring from the bench, stat leaders, standings and every season's history, for your league, at your league's own address."),
     h("div", { class: "row hero-cta" },
       h("a", { class: "btn primary", href: "#leagues" }, "Find your league"),
-      h("a", { class: "btn ghost-light", href: "#start" }, "Start a league")),
-    h("div", { class: "tally" },
-      h("div", null, h("strong", null, leagues.length), leagues.length === 1 ? "League" : "Leagues"),
-      h("div", { class: live ? "live" : "" }, h("strong", null, live), "Live now")));
+      h("a", { class: "btn ghost-light", href: "#start" }, me.via === "session" ? "Your account" : "Sign in")));
 
   // ---- Find your league
   const jump = h("input", { placeholder: "yourleague", autocapitalize: "none", spellcheck: "false", "aria-label": "League address" });
@@ -39,7 +36,7 @@
     const slug = jump.value.trim().toLowerCase().replace(/\..*$/, "");
     if (!/^[a-z0-9-]{2,40}$/.test(slug)) return toast("Type your league's address, like blpa", true);
     const known = leagues.find((l) => l.slug === slug);
-    location.assign(known ? known.url : `${location.protocol}//${slug}.${domain}`);
+    location.assign(known ? `${known.url}/stats` : `${location.protocol}//${slug}.${domain}/stats`);
   };
   const directory = h("section", { id: "leagues" },
     h("div", { class: "section-head" }, h("h2", null, "Find your league")),
@@ -47,15 +44,14 @@
       h("label", { class: "jump-row" }, h("span", { class: "sr-only" }, "League address"),
         jump, h("span", { class: "jump-domain" }, `.${domain}`)),
       h("button", { class: "primary" }, "Go")),
+    h("p", { class: "muted small" }, "Each league has its own address. Its stats are for its players and staff: sign in there with the email your league has for you."),
     leagues.length
-      ? h("div", { class: "league-grid" }, leagues.map((l) => h("a", { class: "league-tile", href: `${l.url}/stats` },
-        h("div", { class: "row between" },
-          h("span", { class: "league-mark" }, monogram(l.name)),
-          l.live_games ? h("span", { class: "badge live" }, `${l.live_games} live`) : ""),
+      ? [h("h3", { style: { marginTop: "18px" } }, "Your leagues"), h("div", { class: "league-grid" }, leagues.map((l) => h("a", { class: "league-tile", href: `${l.url}/stats` },
+        h("div", { class: "row between" }, h("span", { class: "league-mark" }, monogram(l.name)),
+          h("span", { class: "badge" }, { admin: "Admin", scorekeeper: "Scorekeeper", viewer: "Viewer", player: "Player" }[l.role] || "")),
         h("strong", null, l.name),
-        h("span", { class: "league-url" }, l.url.replace(/^https?:\/\//, "")),
-        h("span", { class: "league-meta" }, [l.leagues ? `${l.leagues} league${l.leagues === 1 ? "" : "s"}` : null, l.tournaments ? `${l.tournaments} tournament${l.tournaments === 1 ? "" : "s"}` : null].filter(Boolean).join(" · ") || "Just getting started"))))
-      : h("p", { class: "muted" }, "No leagues yet. Be the first."));
+        h("span", { class: "league-url" }, l.url.replace(/^https?:\/\//, "")))))]
+      : "");
 
   // ---- What it does
   const features = h("section", null,
@@ -83,28 +79,26 @@
       signup: "Create an account, then ask for your league's address. All we keep is your email address.",
       setup: "No admin account exists yet. Enter the setup key from the server log (or ADMIN_TOKEN) to create the platform admin.",
     };
-    const bar = tabs(names, (id) => signInFlow(box, { mode: id, intro: intros[id], onDone: renderSignedIn }), initial, { size: "medium" });
+    const bar = tabs(names, (id) => signInFlow(box, { mode: id, intro: intros[id], onDone: () => location.reload() }), initial, { size: "medium" });
     mount(start,
-      h("div", { class: "section-head" }, h("h2", null, "Start a league")),
+      h("div", { class: "section-head" }, h("h2", null, "Sign in")),
       h("div", { class: "card auth-card" },
-        h("p", { class: "muted small" }, "Players and fans don't need an account: they just visit the league's address. To run a league, create an account and ask for one."),
+        h("p", { class: "muted small" }, "Sign in to see your leagues. Players: use the email your league has for you. Running a league? Create an account, then ask for your league's address."),
         bar.el, box,
         status.dev_codes ? h("p", { class: "notice small" }, "Development server: codes are printed in the server log.") : ""));
-    signInFlow(box, { mode: initial, intro: intros[initial], onDone: renderSignedIn });
+    signInFlow(box, { mode: initial, intro: intros[initial], onDone: () => location.reload() });
   }
 
   async function renderSignedIn() {
     const acct = await get("/account");
-    const mine = await get("/platform/orgs/mine");
-    const list = mine.length
-      ? h("ul", { class: "org-list" }, mine.map((o) => h("li", null,
-        h("div", null, h("b", null, o.name), h("div", { class: "small muted" }, o.url.replace(/^https?:\/\//, ""), " · ", o.role === "admin" ? "Admin" : "Scorekeeper")),
-        o.status === "active"
-          ? h("div", { class: "row" }, h("a", { class: "btn primary", href: `${o.url}/stats` }, "Open"), o.role === "admin" ? h("a", { class: "btn", href: `${o.url}/admin` }, "Admin") : "")
-          : h("span", { class: `badge${o.status === "pending" ? "" : " bad"}` }, STATUS[o.status]))))
-      : h("p", { class: "muted" }, "You aren't part of a league yet. Ask for one below, or ask your league's admin to invite this email address.");
+    const waiting = (await get("/platform/orgs/mine")).filter((o) => o.status !== "active");
+    const list = waiting.length
+      ? h("ul", { class: "org-list" }, waiting.map((o) => h("li", null,
+        h("div", null, h("b", null, o.name), h("div", { class: "small muted" }, o.url.replace(/^https?:\/\//, ""))),
+        h("span", { class: `badge${o.status === "pending" ? "" : " bad"}` }, STATUS[o.status]))))
+      : leagues.length ? "" : h("p", { class: "muted" }, "This account isn't part of a league yet. Players: ask your league's admin to put this email on your player record. Running a league? Ask for one below.");
     mount(start,
-      h("div", { class: "section-head" }, h("h2", null, "Your leagues")),
+      h("div", { class: "section-head" }, h("h2", null, "Your account")),
       acct.staff && !acct.mfa.enabled ? h("section", { class: "card" },
         h("p", { class: "notice" }, "Your account can run a league. Set up an authenticator app or passkey to use that access."),
         h("a", { class: "btn primary", href: "/account#security" }, "Set it up")) : "",

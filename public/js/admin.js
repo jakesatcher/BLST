@@ -971,7 +971,9 @@
           { key: "x", label: "", sort: false, fmt: (g) => h("div", { class: "actions" },
             h("a", { class: "btn sm", href: `/watch?game=${g.id}`, target: "_blank" }, "Watch"),
             h("button", { class: "sm", onclick: async () => {
-              const url = `${location.origin}/overlay?game=${g.id}`;
+              // OBS isn't signed in: the link carries its own view-only key.
+              const k = await run(() => api("POST", "/admin/api-keys", { name: `Overlay: ${g.away_team} @ ${g.home_team}`.slice(0, 80), role: "readonly", expires_in_days: 30 }));
+              const url = `${location.origin}/overlay?game=${g.id}#key=${k.key}`;
               try {
                 await navigator.clipboard.writeText(url);
                 toast("Overlay link copied");
@@ -1377,10 +1379,10 @@
   async function peopleView(el) {
     const [list, tournamentsForAccounts] = await Promise.all([get("/admin/members"), get("/tournaments")]);
     const reload = () => peopleView(el);
-    const roleLabel = { admin: "Admin", scorekeeper: "Scorekeeper" };
+    const roleLabel = { admin: "Admin", scorekeeper: "Scorekeeper", viewer: "Viewer" };
     const tournamentOptions = [["", "All tournaments"], ...tournamentsForAccounts.map((t) => [t.id, t.name])];
     const accessFields = (m = {}) => [
-      { name: "role", label: "Access", type: "select", value: m.role || "scorekeeper", options: [["scorekeeper", "Scorekeeper (runs games)"], ["admin", "Admin (everything)"]] },
+      { name: "role", label: "Access", type: "select", value: m.role || "scorekeeper", options: [["viewer", "Viewer (sees stats; players with their email on file don't need this)"], ["scorekeeper", "Scorekeeper (runs games)"], ["admin", "Admin (everything)"]] },
       { name: "tournament_id", label: "Scorekeeper limited to tournament", type: "select", value: m.tournament_id || "", options: tournamentOptions, hint: "Only applies to scorekeepers." },
     ];
     const tid = (v) => (v.tournament_id ? Number(v.tournament_id) : null);
@@ -1437,11 +1439,15 @@
     const created = h("div");
     mount(view,
       h("div", { class: "card" }, h("h2", null, "Create API key"),
-        h("p", { class: "muted small" }, "scorekeeper: run games (clock, events, lineups). readonly: export API when PUBLIC_EXPORTS=false. admin: everything, including creating keys. Tip: give each rink device its own scorekeeper key, limited to the tournament and expiring after the event; revoke keys you no longer need."),
+        h("p", { class: "muted small" }, "scorekeeper: run games (clock, events, lineups). readonly: view only, for display links (rink TVs, stream overlays) and the export API. admin: everything, including creating keys. Tip: give each rink device its own scorekeeper key, limited to the tournament and expiring after the event; revoke keys you no longer need."),
         h("form", { class: "form", onsubmit: async (e) => {
           e.preventDefault();
           const k = await run(() => api("POST", "/admin/api-keys", values(e.target)));
-          mount(created, h("div", { class: "notice" }, h("strong", null, "Copy this key now — it won't be shown again: "), h("code", { class: "mono" }, k.key)));
+          mount(created, h("div", { class: "notice" }, h("strong", null, "Copy this key now — it won't be shown again: "), h("code", { class: "mono" }, k.key),
+            k.role === "readonly" ? h("div", { class: "small", style: { marginTop: "8px" } }, "Display links (anyone with the link can view, until you revoke the key):",
+              h("ul", null,
+                h("li", null, "Stats page for a rink TV: ", h("code", { class: "mono" }, `${location.origin}/stats#key=${k.key}`)),
+                h("li", null, "Scorebug overlay for OBS: ", h("code", { class: "mono" }, `${location.origin}/overlay?game=GAME_ID#key=${k.key}`), " (Admin → Tournaments → Streams → Copy OBS link makes one per game)"))) : ""));
           keysView().then(() => view.prepend(created));
         } },
           field("Name", input("name", { required: true, placeholder: "Rink 1 scorekeeper" })),

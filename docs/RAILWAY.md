@@ -186,7 +186,10 @@ Then:
 - Railway's own `*.up.railway.app` address shows the platform. Set
   `DEFAULT_ORG=blpa` to make it show an organization instead.
 
-Leave `APP_DOMAIN` unset to run a single league on any address.
+`beerleaguestats.hockey` is built in: without `APP_DOMAIN` the main address is
+still the landing site and leagues are still at `<league>.beerleaguestats.hockey`.
+Set `APP_DOMAIN` only for a different domain, or `APP_DOMAIN=""` to run a
+single league on any address.
 
 Admin → **Security** shows the live security posture. It should be all ✓ once
 email is set up and every admin and scorekeeper has an authenticator or passkey.

@@ -163,7 +163,7 @@ router.get("/admin/members", admin, async (_req, res) => {
 router.post("/admin/members", requireInteractiveAdmin, async (req, res) => {
   const r = await accounts.addMember({
     email: optStr(req.body.email, "email", { max: 254 }),
-    role: optEnum(req.body.role, "role", ["admin", "scorekeeper"]),
+    role: optEnum(req.body.role, "role", ["admin", "scorekeeper", "viewer"]),
     tournament_id: optInt(req.body.tournament_id, "tournament_id", { min: 1 }) ?? null,
   }, { invitedBy: req.auth.accountId, orgName: req.org.name, orgUrl: orgUrl(req.org.slug, req) });
   res.status(201).json(r);
@@ -171,7 +171,7 @@ router.post("/admin/members", requireInteractiveAdmin, async (req, res) => {
 
 router.patch("/admin/members/:accountId", requireInteractiveAdmin, async (req, res) => {
   res.json(await accounts.updateMember(intParam(req.params.accountId, "accountId"), {
-    role: optEnum(req.body.role, "role", ["admin", "scorekeeper"]) ?? undefined,
+    role: optEnum(req.body.role, "role", ["admin", "scorekeeper", "viewer"]) ?? undefined,
     tournament_id: optInt(req.body.tournament_id, "tournament_id", { min: 1 }),
   }));
 });

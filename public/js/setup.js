@@ -205,7 +205,7 @@
       mount(list, table([{ key: "email", label: "Email" }, { key: "role", label: "Role" }, { key: "status", label: "" }], people));
     };
     const email = h("input", { type: "email", required: true, placeholder: "name@example.com", autocomplete: "off" });
-    const role = h("select", null, h("option", { value: "scorekeeper" }, "Scorekeeper"), h("option", { value: "admin" }, "Admin"));
+    const role = h("select", null, h("option", { value: "scorekeeper" }, "Scorekeeper"), h("option", { value: "admin" }, "Admin"), h("option", { value: "viewer" }, "Viewer"));
     mount(body, h("div", { class: "card" },
       h("h2", null, "Who helps run it?"),
       h("p", { class: "muted small" }, "Scorekeepers run the clock and record goals and penalties at the rink. Admins set up seasons, teams and imports. They get an email; their access applies when they sign in with that address."),

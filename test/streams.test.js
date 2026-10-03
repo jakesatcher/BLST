@@ -34,7 +34,7 @@ test("rink stream defaults flow into the game snapshot and game lists", async ()
   assert.equal(saved.status, 200);
   assert.equal(saved.body.delay_sec, 20, "LiveBarn-only rinks default to a 20s delay");
 
-  snap = (await api("GET", `/games/${S.gid}`, undefined, null)).body;
+  snap = (await api("GET", `/games/${S.gid}`, undefined, ctx.viewer)).body;
   assert.equal(snap.stream.livebarn_url, "https://livebarn.com/en/video/1234/surface/5678");
   assert.equal(snap.stream.embed_url, null);
   assert.equal(snap.stream.delay_sec, 20);

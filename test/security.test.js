@@ -129,15 +129,15 @@ test("API1 / A01: tournament-scoped scorekeeper keys can't touch other tournamen
   assert.equal((await api("POST", "/admin/api-keys", { name: "bad", role: "admin", tournament_id: S["Scope A"].tid })).status, 400);
 });
 
-test("API3: private fields never leak to the public", async () => {
+test("API3: private fields never leak to viewers", async () => {
   const p = await api("POST", "/players", { first_name: "Priv", last_name: "Acy", email: "priv@example.com" });
   await db.query("UPDATE players SET factions_player_id = 'cHJpdkBleGFtcGxlLmNvbQ' WHERE id = $1", [p.body.id]);
-  const pub = await call("GET", `/players/${p.body.id}`);
+  const pub = await call("GET", `/players/${p.body.id}`, { token: ctx.viewer });
   assert.equal(pub.body.email, undefined);
   assert.equal(pub.body.factions_player_id, undefined);
-  const list = await call("GET", "/players?q=priv");
+  const list = await call("GET", "/players?q=priv", { token: ctx.viewer });
   assert.ok(!JSON.stringify(list.body).includes("priv@example.com"));
-  assert.equal((await call("GET", "/players?q=priv@example")).body.length, 0, "anonymous search can't probe by email");
+  assert.equal((await call("GET", "/players?q=priv@example", { token: ctx.viewer })).body.length, 0, "anonymous search can't probe by email");
   const hook = await api("POST", "/admin/webhooks", { name: "h", url: "https://example.com/hook" });
   const hooks = (await api("GET", "/admin/webhooks")).body;
   assert.ok(!JSON.stringify(hooks).includes(hook.body.secret), "webhook secrets are masked after creation");
@@ -175,9 +175,9 @@ test("A03: injection-shaped input is treated as data", async () => {
   const name = "Robert'); DROP TABLE players;--";
   const r = await api("POST", "/players", { first_name: name, last_name: "<img src=x onerror=alert(1)>" });
   assert.equal(r.status, 201);
-  assert.equal((await call("GET", `/players/${r.body.id}`)).body.first_name, name);
-  assert.ok((await call("GET", "/players?q=%25'%20OR%201=1--")).status === 200);
-  assert.equal((await call("GET", "/games/1%20OR%201=1")).status, 400);
+  assert.equal((await call("GET", `/players/${r.body.id}`, { token: ctx.viewer })).body.first_name, name);
+  assert.ok((await call("GET", "/players?q=%25'%20OR%201=1--", { token: ctx.viewer })).status === 200);
+  assert.equal((await call("GET", "/games/1%20OR%201=1", { token: ctx.viewer })).status, 400);
 });
 
 test("A05: security headers", async () => {
@@ -219,10 +219,10 @@ test("API4: request size, rate and connection limits", async () => {
     for (let i = 0; i < 2; i++) {
       const ac = new AbortController();
       controllers.push(ac);
-      const r = await fetch(`${ctx.base}/api/v1/stream`, { headers: { "x-forwarded-for": ip }, signal: ac.signal });
+      const r = await fetch(`${ctx.base}/api/v1/stream`, { headers: { "x-forwarded-for": ip, authorization: `Bearer ${ctx.viewer}` }, signal: ac.signal });
       assert.equal(r.status, 200);
     }
-    const third = await fetch(`${ctx.base}/api/v1/stream`, { headers: { "x-forwarded-for": ip } });
+    const third = await fetch(`${ctx.base}/api/v1/stream`, { headers: { "x-forwarded-for": ip, authorization: `Bearer ${ctx.viewer}` } });
     assert.equal(third.status, 429);
   } finally {
     controllers.forEach((c) => c.abort());
@@ -316,12 +316,12 @@ test("Audit F2 / API5: an admin API key can't hand out access or send data off-s
 test("Audit F3 / API3: public tournament and player data is allow-listed", async () => {
   const t = S["Scope A"];
   await api("PUT", `/tournaments/${t.tid}/leagueapps`, { program_ids: ["12345"], registration_prefix: "SA26" });
-  for (const body of [(await call("GET", `/tournaments/${t.tid}`)).body, (await call("GET", "/tournaments")).body.find((x) => x.id === t.tid)]) {
+  for (const body of [(await call("GET", `/tournaments/${t.tid}`, { token: ctx.viewer })).body, (await call("GET", "/tournaments", { token: ctx.viewer })).body.find((x) => x.id === t.tid)]) {
     for (const k of ["leagueapps_program_ids", "registration_seq", "registration_prefix", "factions_points"]) assert.equal(body[k], undefined, k);
   }
   assert.deepEqual((await api("GET", `/tournaments/${t.tid}`)).body.leagueapps_program_ids, ["12345"], "admins still see it");
   const p = (await api("POST", "/players", { first_name: "Allow", last_name: "List", email: "allow.list@example.com" })).body;
-  const pub = (await call("GET", `/players/${p.id}`)).body;
+  const pub = (await call("GET", `/players/${p.id}`, { token: ctx.viewer })).body;
   const allowed = ["id", "first_name", "last_name", "position", "shoots", "preferred_number", "external_id", "player_code",
     "created_at", "updated_at", "rosters"];
   assert.deepEqual(Object.keys(pub).filter((k) => !allowed.includes(k)), []);

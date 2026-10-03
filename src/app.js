@@ -5,7 +5,7 @@ const cors = require("cors");
 const helmet = require("helmet");
 const config = require("./config");
 const db = require("./db");
-const { authenticate } = require("./middleware/auth");
+const { authenticate, hasRole } = require("./middleware/auth");
 const { resolveOrg, requireLiveOrg } = require("./middleware/org");
 const { HttpError, pgToHttp } = require("./lib/http");
 const { rateLimit } = require("./lib/rateLimit");
@@ -117,6 +117,17 @@ function createApp() {
   api.use((req, _res, next) => {
     if (req.org || /^\/(platform|auth|account|me|org)(\/|$)/.test(req.path)) return next();
     next(new HttpError(404, "open this from your organization's address"));
+  });
+  // A league's information is only for its people: signing in, the account,
+  // "who am I", the platform and team/tournament logos (images can't send a
+  // sign-in header) are open; everything else needs at least view access
+  // (a member, a player of the league, or a view-only key).
+  const OPEN = /^\/(org|me|auth|account|platform)(\/|$)|^\/(teams|tournaments)\/\d+\/logo$/;
+  api.use((req, _res, next) => {
+    if (!req.org || OPEN.test(req.path) || hasRole(req, "readonly")) return next();
+    next(req.auth.role
+      ? new HttpError(403, "your account isn't part of this league; ask one of its admins to add you")
+      : new HttpError(401, "sign in to see this league"));
   });
   api.use(require("./routes/platform"));
   api.use(require("./routes/auth"));

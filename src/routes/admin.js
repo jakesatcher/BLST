@@ -15,6 +15,7 @@ router.get("/me", (req, res) => {
     role: req.auth.role, via: req.auth.via, key_name: req.auth.keyName || null, tournament_id: req.auth.tournamentId || null,
     account_id: req.auth.accountId || null, email: req.auth.email || null, platform_admin: Boolean(req.auth.platformAdmin),
     mfa_required: Boolean(req.auth.mfaRequired),
+    can_view: Boolean(req.org) && require("../middleware/auth").hasRole(req, "readonly"), viewer: req.auth.viewer || false,
     org: req.org ? { slug: req.org.slug, name: req.org.name, factions_enabled: req.org.factions_enabled } : null,
   });
 });

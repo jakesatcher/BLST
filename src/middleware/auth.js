@@ -70,15 +70,22 @@ async function authenticate(req, res, next) {
       const m = req.org && !platformAdmin
         ? await db.one("SELECT role, tournament_id FROM org_members WHERE account_id = $1", [a.id])
         : null;
-      let role = platformAdmin ? "admin" : m ? m.role : "user";
+      let role = platformAdmin ? "admin" : m ? (m.role === "viewer" ? "readonly" : m.role) : "user";
+      // A league's players can see its stats: an account whose email is on
+      // one of this league's players views it (read-only) without being added.
+      let viaPlayer = false;
+      if (role === "user" && req.org && a.email) {
+        viaPlayer = Boolean(await db.one("SELECT 1 FROM players WHERE lower(email) = lower($1) LIMIT 1", [a.email]));
+        if (viaPlayer) role = "readonly";
+      }
       // Staff access needs a session that passed the second factor
       // (authenticator app or passkey). Without one: an ordinary account
-      // until they set one up.
-      const mfaRequired = role !== "user" && !a.session_mfa;
-      if (mfaRequired) role = "user";
+      // until they set one up. Viewing doesn't need one.
+      const mfaRequired = (role === "admin" || role === "scorekeeper") && !a.session_mfa;
+      if (mfaRequired) role = "readonly";
       req.auth = {
         role, via: "session", accountId: a.id, sessionId: a.session_id, email: a.email, platformAdmin: platformAdmin && !mfaRequired,
-        sessionMfa: Boolean(a.session_mfa), mfaRequired,
+        sessionMfa: Boolean(a.session_mfa), mfaRequired, viewer: m ? m.role === "viewer" : viaPlayer ? "player" : false,
         tournamentId: m && m.role === "scorekeeper" && !mfaRequired ? m.tournament_id : null, actor: `account:${a.id}`,
       };
       return next();

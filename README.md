@@ -37,6 +37,13 @@ On the platform's own address: `/` (sign in, your organizations, ask for a new o
 
 - **Asking for one:** anyone creates an account on the platform, picks a name and an address (`metro` → `metro.beerleaguestats.hockey`) and asks. Platform admins get an email and approve or reject it at `/platform`; the person who asked gets an email and becomes the organization's admin.
 - **Separate data:** each organization has its own tournaments, teams, players, stats, API keys, webhooks, Factions and people. The database enforces it (Postgres row-level security), so a bug in one query can't show one league's data to another.
+- **Private to the league:** nothing about a league is visible without signing in, not even its stats, schedule or standings. The main site shows no league names either. Who can see a league:
+  - its **admins and scorekeepers**;
+  - **viewers** an admin adds under Admin → Organization → People (view only; no second factor needed);
+  - its **players**: an account whose email is on a player record in that league sees it read-only, automatically. Keep players' emails on file (registrations, LeagueApps, or History → Match players → attach emails) and they just sign in;
+  - **display links** for rink TVs and stream overlays: a *readonly* API key in the link after `#key=` (the part after `#` never reaches the server or its logs). Admin → Tournaments → Streams → **Copy OBS link** makes one per game; revoke the key to turn a link off.
+
+  Team and tournament logo images stay viewable without signing in, so they can load in pages and overlays.
 - **Players belong to one organization:** someone who plays in two organizations is a separate player in each (even with the same email). Their games, imported history, career totals, clubs, league stats and ratings never combine across organizations, and each organization has its own tournament types and Tournament IDs.
 - **People:** organization admins add people by email under **Admin → Organization → People** as *Admin* or *Scorekeeper* (optionally one tournament). Someone without an account gets an email invitation; the access applies when they sign up with that address. One account can belong to several organizations.
 - **Sign-in is per address:** signing in on the platform doesn't sign you in on `metro.beerleaguestats.hockey`; sign in there too (same account, same codes).

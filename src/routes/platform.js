@@ -41,18 +41,6 @@ router.get("/org", (req, res) => {
   });
 });
 
-/** The landing page's directory: every live league and its address. */
-router.get("/platform/leagues", async (req, res) => {
-  const rows = await withOrg("*", () => db.many(
-    `SELECT o.slug, o.name,
-            (SELECT count(*) FROM games g WHERE g.org_id = o.id AND g.status IN ('live', 'intermission'))::int AS live_games,
-            (SELECT count(*) FROM leagues l WHERE l.org_id = o.id)::int AS leagues,
-            (SELECT count(*) FROM tournaments t WHERE t.org_id = o.id AND t.kind <> 'league')::int AS tournaments
-       FROM organizations o WHERE o.status = 'active' ORDER BY lower(o.name)`));
-  res.set("Cache-Control", "public, max-age=30");
-  res.json(rows.map((o) => ({ ...o, url: orgUrl(o.slug, req) })));
-});
-
 function checkSlug(raw) {
   const slug = String(raw || "").trim().toLowerCase();
   if (!SLUG_RE.test(slug)) throw badRequest("the address can use letters, numbers and dashes (2-40), like \"metro-hockey\"");
@@ -100,9 +88,15 @@ router.post("/platform/orgs", requireAccount, async (req, res) => {
   res.status(201).json(orgView(org, req));
 });
 
+/** The leagues this account can open: where it's staff or a viewer, and where its email is on a player. */
 router.get("/platform/orgs/mine", requireAccount, async (req, res) => {
   const a = await accounts.accountView(req.auth.accountId);
-  res.json(a.orgs.map((o) => ({ ...o, url: orgUrl(o.slug, req) })));
+  const played = await withOrg("*", () => db.many(
+    `SELECT DISTINCT o.id, o.slug, o.name, o.status, o.factions_enabled, 'player' AS role
+       FROM players p JOIN organizations o ON o.id = p.org_id
+      WHERE lower(p.email) = lower($1) AND o.status = 'active'`, [a.email]));
+  const all = [...a.orgs, ...played.filter((p) => !a.orgs.some((o) => o.id === p.id))];
+  res.json(all.map((o) => ({ ...o, url: orgUrl(o.slug, req) })));
 });
 
 // ---------------------------------------------------------------------------

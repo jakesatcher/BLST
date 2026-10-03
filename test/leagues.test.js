@@ -63,7 +63,7 @@ test("a league has divisions and seasons; each division in a season is a competi
   assert.equal(S.b25.kind, "league");
   assert.equal((await api("POST", `/leagues/${S.league}/seasons/${S.s2025}/divisions/${S.div.B.id}`, { num_teams: 2 })).status, 409, "one B per season");
 
-  const view = (await api("GET", `/leagues/${S.league}`, undefined, null)).body;
+  const view = (await api("GET", `/leagues/${S.league}`, undefined, ctx.viewer)).body;
   assert.deepEqual(view.seasons.map((s) => [s.name, s.divisions.map((d) => d.division)]), [["2026", ["B"]], ["2025", ["B", "D"]]]);
   // Teams carry over between seasons (same name, same team).
   const club = (id) => db.one("SELECT club_id FROM teams WHERE tournament_id = $1 AND name = 'Wolves'", [id]);
@@ -84,7 +84,7 @@ test("stats by season and division follow players across teams and divisions", a
   // 2026: Ace moves to the Bears.
   await play(S.b26.id, { Bears: [S.ace, S.cal], Wolves: [S.bea] }, [S.ace, S.bea, S.ace]);
 
-  const all = (await api("GET", `/leagues/${S.league}/stats`, undefined, null)).body;
+  const all = (await api("GET", `/leagues/${S.league}/stats`, undefined, ctx.viewer)).body;
   const ace = all.skaters.find((p) => p.player_id === S.ace);
   assert.equal(ace.goals, 2 + 3 + 2);
   assert.equal(ace.gp, 3);
@@ -125,7 +125,7 @@ test("ratings: production per game, adjusted for division, games played and rece
   // By default players need 3 games to be rated; this small test league has fewer.
   assert.equal((await api("GET", `/leagues/${S.league}/ratings`)).body.settings.min_games, 3);
   await api("PUT", `/leagues/${S.league}/rating-settings`, { min_games: 1 });
-  const r = (await api("GET", `/leagues/${S.league}/ratings`, undefined, null)).body;
+  const r = (await api("GET", `/leagues/${S.league}/ratings`, undefined, ctx.viewer)).body;
   assert.ok(r.skaters.length >= 4);
   for (const s of r.skaters) {
     assert.ok(s.rating >= 0 && s.rating <= 100);

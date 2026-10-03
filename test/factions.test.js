@@ -144,11 +144,11 @@ test("events: participation, per-event and all-time Order standings", async () =
 
   const ev = (await api("GET", `/factions/events/${e.body.id}`)).body;
   assert.equal(ev.participation.length, 2);
-  const totals = (await api("GET", `/factions/events/${e.body.id}/totals`, undefined, null)).body;
+  const totals = (await api("GET", `/factions/events/${e.body.id}/totals`, undefined, ctx.viewer)).body;
   assert.equal(totals.reduce((s, o) => s + o.total_points, 0), 12);
   assert.equal(totals[0].rank, 1);
 
-  const all = (await api("GET", "/factions/orders", undefined, null)).body;
+  const all = (await api("GET", "/factions/orders", undefined, ctx.viewer)).body;
   const kimOrder = all.find((o) => o.slug === kim.order_slug);
   assert.ok(kimOrder.event_points >= 8);
   assert.equal(kimOrder.total_points, kimOrder.bonus_points + kimOrder.event_points);
@@ -157,7 +157,7 @@ test("events: participation, per-event and all-time Order standings", async () =
 });
 
 test("privacy: public Factions data has names and totals, never emails or member ids", async () => {
-  const pub = await api("GET", "/factions", undefined, null);
+  const pub = await api("GET", "/factions", undefined, ctx.viewer);
   assert.equal(pub.status, 200);
   const text = JSON.stringify(pub.body);
   assert.ok(!text.includes("@"));

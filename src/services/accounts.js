@@ -290,7 +290,7 @@ function sessionHours(role) {
 async function strongestRole(acct) {
   if (acct.role === "admin") return "admin";
   const r = await withOrg("*", () => db.one(
-    "SELECT max(CASE role WHEN 'admin' THEN 2 ELSE 1 END) AS r FROM org_members WHERE account_id = $1", [acct.id]));
+    "SELECT max(CASE role WHEN 'admin' THEN 2 WHEN 'scorekeeper' THEN 1 ELSE 0 END) AS r FROM org_members WHERE account_id = $1", [acct.id]));
   return r && r.r === 2 ? "admin" : r && r.r === 1 ? "scorekeeper" : "user";
 }
 
@@ -487,7 +487,7 @@ async function assertNotLastOrgAdmin(c, accountId) {
  */
 async function addMember({ email: rawEmail, role, tournament_id: tournamentId }, { invitedBy, orgName, orgUrl } = {}) {
   const email = normEmail(rawEmail);
-  if (!["admin", "scorekeeper"].includes(role)) throw badRequest("role must be admin or scorekeeper");
+  if (!["admin", "scorekeeper", "viewer"].includes(role)) throw badRequest("role must be admin, scorekeeper or viewer");
   return db.tx(async (c) => {
     const tid = await checkTournament(c, role, tournamentId);
     const acct = (await c.query("SELECT id FROM accounts WHERE email = $1", [email])).rows[0];
@@ -518,7 +518,7 @@ async function updateMember(accountId, { role, tournament_id: tournamentId }) {
     const cur = (await c.query("SELECT * FROM org_members WHERE account_id = $1", [accountId])).rows[0];
     if (!cur) throw new HttpError(404, "member not found");
     const nextRole = role ?? cur.role;
-    if (!["admin", "scorekeeper"].includes(nextRole)) throw badRequest("role must be admin or scorekeeper");
+    if (!["admin", "scorekeeper", "viewer"].includes(nextRole)) throw badRequest("role must be admin, scorekeeper or viewer");
     if (cur.role === "admin" && nextRole !== "admin") await assertNotLastOrgAdmin(c, accountId);
     const tid = await checkTournament(c, nextRole, tournamentId === undefined ? cur.tournament_id : tournamentId);
     return (await c.query("UPDATE org_members SET role = $2, tournament_id = $3 WHERE account_id = $1 RETURNING *", [accountId, nextRole, tid])).rows[0];

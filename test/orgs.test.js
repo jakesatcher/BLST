@@ -41,7 +41,11 @@ function call(method, hostName, path, { body, token, ip = nextIp() } = {}) {
     req.end();
   });
 }
-const api = (method, slug, path, opts) => call(method, host(slug), `/api/v1${path}`, opts);
+// A league's data is only for its people: reads go in as one of them (BLPA's
+// admin, Metro's owner) unless a test passes its own token or anon: true.
+const memberOf = (slug) => (slug === "blpa" ? ADMIN : slug === "metro" && S.owner ? S.owner.token : undefined);
+const api = (method, slug, path, opts = {}) => call(method, host(slug), `/api/v1${path}`,
+  opts.token || opts.anon || method !== "GET" ? opts : { ...opts, token: memberOf(slug) });
 const codeFor = (to) => [...outbox].reverse().find((m) => m.to === to).text.match(/\b(\d{6})\b/)[1];
 
 /** Signs up and sets up an authenticator, so the session can use staff access it gets later. */
@@ -251,7 +255,7 @@ test("a new organization's admin is guided through league setup", async () => {
   assert.ok(outbox.some((m) => m.to === "owner@metro.example" && /metro\.bls\.test\/setup/.test(m.text)), "approval email links to setup");
   assert.equal((await api("GET", "blpa", "/org")).body.org.setup_needed, false, "existing organizations are already set up");
   assert.equal((await api("GET", "metro", "/org")).body.org.setup_needed, true);
-  assert.equal((await api("GET", "metro", "/admin/onboarding")).status, 401, "admins only");
+  assert.equal((await api("GET", "metro", "/admin/onboarding", { anon: true })).status, 401, "admins only");
 
   let p = (await api("GET", "metro", "/admin/onboarding", { token: tok })).body;
   // Earlier tests already gave Metro a league with divisions and imported history.
@@ -283,7 +287,7 @@ test("a new organization's admin is guided through league setup", async () => {
 
 test("the live stream only carries an organization's own events", async () => {
   const seen = [];
-  const reqStream = http.request({ host: "127.0.0.1", port, path: "/api/v1/stream", headers: { host: host("metro"), "x-forwarded-for": nextIp() } }, (res) => {
+  const reqStream = http.request({ host: "127.0.0.1", port, path: "/api/v1/stream", headers: { host: host("metro"), "x-forwarded-for": nextIp(), authorization: `Bearer ${S.owner.token}` } }, (res) => {
     res.on("data", (c) => seen.push(String(c)));
   });
   reqStream.end();
@@ -342,19 +346,43 @@ test("Factions is off until an organization turns it on, with factions it design
   assert.equal((await api("GET", "metro", "/factions/members?q=jane", { token: tok })).body.members[0].id, jane.id);
 });
 
-test("the main site lists every live league with its own address", async () => {
-  const list = (await api("GET", "", "/platform/leagues")).body;
-  const slugs = list.map((o) => o.slug);
-  assert.ok(slugs.includes("blpa") && slugs.includes("metro"), JSON.stringify(slugs));
-  const metro = list.find((o) => o.slug === "metro");
-  assert.equal(metro.url, "https://metro.bls.test");
-  assert.ok(metro.leagues >= 1);
-  assert.equal(typeof metro.live_games, "number");
-  for (const o of list) assert.deepEqual(Object.keys(o).sort(), ["leagues", "live_games", "name", "slug", "tournaments", "url"], "nothing private");
-  // Leagues waiting for approval aren't listed.
-  const tok = S.owner.token;
-  await api("POST", "", "/platform/orgs", { token: tok, body: { name: "Gurha Hockey", slug: "gurha-test" } });
-  assert.ok(!(await api("GET", "", "/platform/leagues")).body.some((o) => o.slug === "gurha-test"));
+test("league data is only for its people: players by email, viewers, display keys; never anonymous", async () => {
+  // The main site lists no leagues to anyone who isn't signed in.
+  assert.equal((await api("GET", "", "/platform/leagues")).status, 404);
+  assert.equal((await api("GET", "blpa", "/tournaments", { anon: true })).status, 401);
+  assert.equal((await api("GET", "blpa", "/leaders", { anon: true })).status, 401);
+  assert.equal((await api("GET", "blpa", "/org", { anon: true })).status, 200, "the league's name for the sign-in screen");
+
+  // Jo plays in both leagues (same email on both player records): signing up
+  // is enough to see both, read-only, without being added.
+  const jo = await signUp("jo.twice@example.com");
+  const mine = (await api("GET", "", "/platform/orgs/mine", { token: jo.token })).body;
+  assert.deepEqual(mine.map((o) => [o.slug, o.role]).sort(), [["blpa", "player"], ["metro", "player"]]);
+  assert.equal(mine.find((o) => o.slug === "metro").url, "https://metro.bls.test");
+  const me = (await api("GET", "blpa", "/me", { token: jo.token })).body;
+  assert.equal(me.can_view, true);
+  assert.equal(me.viewer, "player");
+  assert.equal((await api("GET", "blpa", "/tournaments", { token: jo.token })).status, 200);
+  assert.equal((await api("POST", "blpa", "/tournaments", { token: jo.token, body: { name: "Nope" } })).status, 403, "viewing only");
+
+  // Someone else's account sees nothing, until an admin adds them as a viewer.
+  const fan = await signUp("fan@example.com");
+  assert.equal((await api("GET", "metro", "/me", { token: fan.token })).body.can_view, false);
+  const denied = await api("GET", "metro", "/tournaments", { token: fan.token });
+  assert.equal(denied.status, 403);
+  assert.match(denied.body.error, /isn't part of this league/);
+  const add = await api("POST", "metro", "/admin/members", { token: S.owner.token, body: { email: "fan@example.com", role: "viewer" } });
+  assert.equal(add.status, 201, JSON.stringify(add.body));
+  assert.equal((await api("GET", "metro", "/tournaments", { token: fan.token })).status, 200);
+  assert.equal((await api("GET", "metro", "/admin/members", { token: fan.token })).status, 403);
+  assert.equal((await api("GET", "blpa", "/tournaments", { token: fan.token })).status, 403, "only the league that added them");
+  const fanAcct = (await api("GET", "", "/account", { token: fan.token })).body;
+  assert.equal(fanAcct.staff, false, "viewers aren't staff (no second factor needed)");
+
+  // A display link's view-only key works for its league only.
+  const key = (await api("POST", "metro", "/admin/api-keys", { token: S.owner.token, body: { name: "Rink TV", role: "readonly" } })).body.key;
+  assert.equal((await api("GET", "metro", "/tournaments", { token: key })).status, 200);
+  assert.equal((await api("GET", "blpa", "/tournaments", { token: key })).status, 401);
 });
 
 test("platform admins can suspend an organization", async () => {

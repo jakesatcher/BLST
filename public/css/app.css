@@ -885,3 +885,15 @@ a.card.game-card strong { font-family: var(--display); font-weight: 600; font-si
 .feature p { margin: 0; color: var(--muted); }
 #start .auth-card { margin-top: 0; }
 #leagues, #start { scroll-margin-top: 16px; }
+
+/* Sign-in gate on league pages */
+.gate-card { text-align: center; margin-top: 40px; }
+.gate-card h1 { justify-content: center; }
+.gate-card h1::after { display: none; }
+.gate-card .tabs { justify-content: center; }
+.gate-card .row { justify-content: center; }
+.gate-mark {
+  width: 64px; height: 64px; margin: 4px auto 10px; border-radius: 50%;
+  background: radial-gradient(ellipse 60% 35% at 50% 38%, #3b4352, #111 70%);
+  box-shadow: 0 0 0 3px rgba(12, 26, 44, 0.08), 0 5px 0 #000, 0 8px 18px rgba(0, 0, 0, 0.35);
+}

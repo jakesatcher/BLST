@@ -60,12 +60,17 @@ module.exports = {
   // Organizations live at <slug>.<APP_DOMAIN> (e.g. blpa.beerleaguestats.hockey);
   // the bare domain is the platform. Without APP_DOMAIN every host serves
   // DEFAULT_ORG, which is how a single-league install keeps working.
-  appDomain: (process.env.APP_DOMAIN || "").toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, ""),
+  // beerleaguestats.hockey is built in, so the main address can never show a
+  // league even if APP_DOMAIN isn't set; APP_DOMAIN="" turns it off.
+  appDomain: (process.env.APP_DOMAIN ?? "beerleaguestats.hockey").toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, ""),
   // Links to league pages on the main site from before organizations had
   // their own addresses (beerleaguestats.hockey/stats …) go to this
   // organization's address instead.
   legacyOrg: (process.env.LEGACY_ORG ?? "blpa").toLowerCase(),
-  defaultOrg: process.env.DEFAULT_ORG !== undefined ? process.env.DEFAULT_ORG.toLowerCase() : process.env.APP_DOMAIN ? "" : "blpa",
+  // Any other address (Railway's *.up.railway.app, a forwarding service)
+  // shows the landing site too, unless DEFAULT_ORG names a league for it.
+  defaultOrg: process.env.DEFAULT_ORG !== undefined ? process.env.DEFAULT_ORG.toLowerCase()
+    : (process.env.APP_DOMAIN ?? "beerleaguestats.hockey") ? "" : "blpa",
   auth: {
     // Keys the one-time-code hashes. Without the config var the server
     // generates one on first boot and keeps it in the database
