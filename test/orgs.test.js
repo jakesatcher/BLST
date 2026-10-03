@@ -167,6 +167,79 @@ test("organizations can't see or touch each other's data, even with the right id
   assert.equal((await api("GET", "metro", "/admin/members", { token: tok })).body.members.length, 1);
 });
 
+test("a player's stats belong to one organization: games, imports, history, clubs, leagues, ratings", async () => {
+  const tok = S.owner.token;
+  const as = (slug) => (slug === "blpa" ? ADMIN : tok);
+  // The same person (same name and email) plays in both organizations.
+  const jane = {};
+  for (const slug of ["blpa", "metro"]) {
+    const r = await api("POST", slug, "/players", { token: as(slug), body: { first_name: "Jo", last_name: "Twice", email: "jo.twice@example.com" } });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    jane[slug] = r.body.id;
+  }
+  assert.notEqual(jane.blpa, jane.metro);
+
+  /** Rosters Jo on the first team of a competition and scores `goals` for her in one game. */
+  async function play(slug, tid, goals) {
+    const teams = (await api("GET", slug, `/tournaments/${tid}`)).body.teams;
+    assert.equal((await api("POST", slug, `/tournaments/${tid}/roster`, { token: as(slug), body: { player_id: jane[slug], team_id: teams[0].id, jersey_number: 19 } })).status, 201);
+    const g = (await api("POST", slug, `/tournaments/${tid}/games`, { token: as(slug), body: { home_team_id: teams[0].id, away_team_id: teams[1].id } })).body;
+    assert.equal((await api("POST", slug, `/games/${g.id}/start`, { token: as(slug), body: {} })).status, 200);
+    for (let i = 0; i < goals; i++) assert.equal((await api("POST", slug, `/games/${g.id}/events`, { token: as(slug), body: { type: "goal", player_id: jane[slug] } })).status, 201);
+    assert.equal((await api("POST", slug, `/games/${g.id}/end`, { token: as(slug), body: {} })).status, 200);
+  }
+
+  // BLPA: a tournament (3 goals) plus an imported old tournament (10 goals) matched by her email.
+  const blpaT = (await api("POST", "blpa", "/tournaments", { token: ADMIN, body: { name: "Shared Name Cup", format: "team", num_teams: 2, team_names: ["Wolves", "Bears"] } })).body;
+  await play("blpa", blpaT.id, 3);
+  const imp = await api("POST", "blpa", "/import/historical", { token: ADMIN, body: { city: "Pittsburgh", series: "DEX", year: 2024,
+    rows: [{ first_name: "Jo", last_name: "Twice", email: "jo.twice@example.com", team: "Wolves", gp: 5, g: 10, a: 2 }] } });
+  assert.equal(imp.status, 200, JSON.stringify(imp.body));
+  assert.equal(imp.body.created_players, 0, "matched BLPA's Jo by email");
+
+  // Metro: a league division (1 goal), same team names, and its own import with the same Tournament ID.
+  const L = (await api("POST", "metro", "/leagues", { token: tok, body: { name: "Metro League", divisions: ["C"] } })).body;
+  const season = (await api("POST", "metro", `/leagues/${L.id}/seasons`, { token: tok, body: { name: "2026", year: 2026 } })).body;
+  const comp = (await api("POST", "metro", `/leagues/${L.id}/seasons/${season.id}/divisions/${L.divisions[0].id}`, { token: tok, body: { team_names: ["Wolves", "Bears"] } })).body;
+  await api("PUT", "metro", `/leagues/${L.id}/rating-settings`, { token: tok, body: { min_games: 1 } });
+  await play("metro", comp.id, 1);
+  const mImp = await api("POST", "metro", "/import/historical", { token: tok, body: { city: "Pittsburgh", series: "DEX", year: 2024,
+    rows: [{ first_name: "Jo", last_name: "Twice", email: "jo.twice@example.com", gp: 1, g: 2, a: 0 }] } });
+  assert.equal(mImp.status, 200, "the same Tournament ID is free in another organization");
+  assert.equal(mImp.body.created_players, 0, "matched Metro's Jo, not BLPA's");
+
+  // Careers count only their own organization's games.
+  const blpaCareer = (await api("GET", "blpa", `/players/${jane.blpa}/career`)).body;
+  const metroCareer = (await api("GET", "metro", `/players/${jane.metro}/career`)).body;
+  assert.equal(blpaCareer.career.skater.goals, 13, "3 live + 10 imported, BLPA only");
+  assert.equal(metroCareer.career.skater.goals, 3, "1 live + 2 imported, Metro only");
+  assert.equal((await api("GET", "metro", `/players/${jane.blpa}/career`)).status, 404);
+  assert.equal((await api("GET", "metro", `/export/players/${jane.blpa}`)).status, 404);
+
+  // History leaderboards and clubs.
+  const hist = async (slug) => (await api("GET", slug, "/history/players?q=twice")).body;
+  const bh = await hist("blpa");
+  const mh = await hist("metro");
+  const rows = (x) => (Array.isArray(x) ? x : x.players);
+  assert.deepEqual(rows(bh).map((p) => p.player_id), [jane.blpa]);
+  assert.deepEqual(rows(mh).map((p) => p.player_id), [jane.metro]);
+  const clubs = async (slug) => (await api("GET", slug, "/clubs")).body;
+  const bw = (await clubs("blpa")).find((c) => c.name === "Wolves");
+  const mw = (await clubs("metro")).find((c) => c.name === "Wolves");
+  assert.ok(bw && mw && bw.id !== mw.id, "same team name, separate clubs");
+  assert.equal((await api("GET", "metro", `/clubs/${bw.id}`)).status, 404);
+
+  // League stats and ratings only see Metro.
+  const lstats = (await api("GET", "metro", `/leagues/${L.id}/stats`)).body;
+  assert.deepEqual(lstats.skaters.filter((x) => x.goals > 0).map((x) => [x.player_id, x.goals]), [[jane.metro, 1]]);
+  const ratings = (await api("GET", "metro", `/leagues/${L.id}/ratings`)).body;
+  assert.ok(ratings.skaters.every((r) => r.player_id !== jane.blpa));
+  assert.ok(ratings.skaters.some((r) => r.player_id === jane.metro));
+  assert.equal((await api("GET", "blpa", `/leagues/${L.id}`)).status, 404);
+  assert.equal((await api("GET", "blpa", `/leagues/${L.id}/ratings`)).status, 404);
+  assert.ok(!(await api("GET", "blpa", "/leagues")).body.some((x) => x.id === L.id));
+});
+
 test("the live stream only carries an organization's own events", async () => {
   const seen = [];
   const reqStream = http.request({ host: "127.0.0.1", port, path: "/api/v1/stream", headers: { host: host("metro"), "x-forwarded-for": nextIp() } }, (res) => {
