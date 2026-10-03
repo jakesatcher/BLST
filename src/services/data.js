@@ -4,7 +4,8 @@ const clock = require("../lib/clock");
 const { computeGameStats, aggregatePlayerStats, computeStandings } = require("../lib/stats");
 const { resolveStream } = require("../lib/streams");
 
-const PUBLIC_PLAYER_COLS = "p.id, p.first_name, p.last_name, p.position, p.shoots, p.preferred_number, p.external_id, p.factions_order";
+// Factions is a separate section: no faction data in player stats.
+const PUBLIC_PLAYER_COLS = "p.id, p.first_name, p.last_name, p.position, p.shoots, p.preferred_number, p.external_id";
 
 async function getTournament(id, client = db) {
   const t = await client.query("SELECT * FROM tournaments WHERE id = $1", [id]).then((r) => r.rows[0]);
@@ -273,7 +274,6 @@ async function computeTournamentStats(tournamentId) {
       name: p.first_name ? `${p.first_name} ${p.last_name}` : `Player ${line.player_id}`,
       position: p.position,
       jersey_number: p.jersey_number ?? null,
-      factions_order: p.factions_order ?? null,
       team_id: currentTeam,
       team: teamById.get(currentTeam)?.short_name || teamById.get(currentTeam)?.name || null,
       teams: teamIds.map((id) => teamById.get(id)?.name).filter(Boolean),

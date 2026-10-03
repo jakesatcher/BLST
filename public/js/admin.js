@@ -138,7 +138,7 @@
     if (!selectedTid) return mount(body, newTournamentForm());
     const t = await get(`/tournaments/${selectedTid}`);
     const sub = h("div");
-    const subTabs = tabs([["registrations", "Registrations"], ["teams", "Teams & rosters"], ["schedule", "Schedule"], ["import", "Draft / roster upload"], ["streams", "Streams"], ["moves", "Moves"], ["settings", "Settings"], ...(factionsOn ? [["factions", "Factions"]] : [])],
+    const subTabs = tabs([["registrations", "Registrations"], ["teams", "Teams & rosters"], ["schedule", "Schedule"], ["import", "Draft / roster upload"], ["streams", "Streams"], ["moves", "Moves"], ["settings", "Settings"]],
       (s) => tournamentSub(s, t, sub), "teams", { size: "medium" });
     const checklist = h("div");
     mount(body, checklist, subTabs.el, sub);
@@ -155,7 +155,6 @@
       ["Put players on every team: upload the draft results CSV", t.teams.length > 0 && t.teams.every((x) => x.player_count > 0), "Upload rosters", () => subTabs.set("import")],
       ["Schedule games", games.length > 0, "Schedule", () => subTabs.set("schedule")],
       ["Create a scorekeeper key for each rink device", keys.some((k) => k.role === "scorekeeper" && !k.revoked_at), "API keys", () => mainTabs.set("keys")],
-      ["Count it for Factions, so games earn points for each player's faction", Boolean(t.factions_event_id), "Factions", () => subTabs.set("factions")],
       ["Score a game", games.some((g) => g.status !== "scheduled"), "Open scorekeeper", () => (location.href = "/scorekeeper")],
     ];
     const done = steps.filter((x) => x[1]).length;
@@ -249,7 +248,6 @@
       if (tab === "streams") await streamsView(t, el);
       if (tab === "registrations") await registrationsView(t, el);
       if (tab === "settings") settingsView(t, el);
-      if (tab === "factions") await factionsView(t, el);
     } catch (err) {
       mount(el, h("p", { class: "notice error" }, err.message));
     }
@@ -401,7 +399,7 @@
     } },
       field("First name", input("first_name", { required: true })),
       field("Last name", input("last_name", { required: true })),
-      field("Email (needed for Factions)", input("email", { type: "email" })),
+      field("Email", input("email", { type: "email" })),
       field("Shoots", select("shoots", [["", "—"], "L", "R"], "")),
       h("div", null, h("button", { class: "primary" }, "Create & add")));
 
@@ -860,12 +858,11 @@
     ], moves, { sortKey: "created_at" })));
   }
 
+  /** Factions points for one tournament or league division (lives in the Factions admin). */
   async function factionsView(t, el) {
-    const [status, roster] = await Promise.all([get("/factions/status"), get(`/tournaments/${t.id}/teams`)]);
-    const players = roster.flatMap((team) => team.roster);
-    const noEmail = players.filter((p) => !p.factions_order);
+    const status = await get("/factions/status");
     const out = h("div");
-    const refresh = async () => tournamentSub("factions", await get(`/tournaments/${t.id}`), el);
+    const refresh = async () => factionsView(await get(`/tournaments/${t.id}`), el);
     const counts = Boolean(t.factions_event_id);
     const pts = { ...status.default_points, ...(t.factions_points || {}) };
     const ptsForm = h("form", { class: "form", onsubmit: async (e) => {
@@ -892,11 +889,11 @@
           h("h2", { style: { margin: 0 } }, "Factions"),
           counts ? h("span", { class: "badge good" }, "Counts for Factions") : h("span", { class: "badge" }, "Not counting")),
         h("p", { class: "muted" }, counts
-          ? `Games in this tournament earn points for each player's faction${status.auto_award ? ", updated every time a game goes final" : ""}. Fans see the result on the tournament's Factions tab and the Factions page.`
+          ? `Games in this tournament earn points for each player's faction${status.auto_award ? ", updated every time a game goes final" : ""}. Fans see the result on the Factions page.`
           : "Turn this on and every game here earns Factions points for the players' factions: games played, goals, assists, wins, shutouts, hat tricks and the title."),
         h("div", { class: "row" },
           counts
-            ? [h("a", { class: "btn", href: `/tournament?id=${t.id}#orders`, target: "_blank" }, "See standings ↗"),
+            ? [h("a", { class: "btn", href: "/factions", target: "_blank" }, "See standings ↗"),
               h("button", { class: "danger", onclick: async () => {
                 if (!(await confirmSheet("Stop counting this tournament? Points already awarded stay in Factions.", { title: "Stop counting", confirmLabel: "Stop counting" }))) return;
                 await run(() => api("DELETE", `/tournaments/${t.id}/factions/link`), "Stopped counting");
@@ -906,11 +903,7 @@
               await run(() => api("POST", `/tournaments/${t.id}/factions/link`, {}), "Counting for Factions");
               await api("POST", `/tournaments/${t.id}/factions/award`).catch(() => {});
               refresh();
-            } }, "Count this tournament for Factions")),
-        noEmail.length
-          ? h("p", { class: "notice small", style: { marginTop: "10px" } }, `${noEmail.length} rostered player${noEmail.length === 1 ? " has" : "s have"} no email, so no faction and no points: `,
-            noEmail.slice(0, 8).map((p) => `${p.first_name} ${p.last_name}`).join(", "), noEmail.length > 8 ? "…" : "", ". Add emails under Teams & rosters or with the roster upload.")
-          : players.length ? h("p", { class: "muted small", style: { marginTop: "10px" } }, `All ${players.length} rostered players have a faction.`) : ""),
+            } }, "Count this tournament for Factions"))),
       h("div", { class: "card" }, h("h2", null, "Point values"),
         h("p", { class: "muted small" }, "Per player. After playoffs, set each team's final place on Teams & rosters so the champion and runner-up bonuses apply. Hat tricks, shutouts and titles also become achievements."),
         ptsForm,
@@ -937,7 +930,7 @@
         { key: "id", label: "ID", num: true },
         { key: "last_name", label: "Name", fmt: (p) => `${p.first_name} ${p.last_name}` },
         { key: "email", label: "Email" }, { key: "position", label: "Pos" }, { key: "preferred_number", label: "#", num: true },
-        { key: "external_id", label: "External ID" }, { key: "factions_order", label: "Faction", fmt: (p) => BLST.orderBadge(p.factions_order, { link: false }) },
+        { key: "external_id", label: "External ID" }, 
       ], list, { sortKey: "last_name", sortDir: 1, onRow: (p) => editPlayer(p.id) }));
     };
     search.addEventListener("input", debounce(load, 250));
@@ -947,7 +940,6 @@
       const hist = await get(`/players/${id}/history`);
       mount(editor, h("div", { class: "card" },
         h("div", { class: "row between" }, h("h2", null, `${p.first_name} ${p.last_name}`), h("a", { href: `/player?id=${id}`, target: "_blank" }, "Public page ↗")),
-        p.factions_order ? h("p", { class: "small" }, "Factions: ", BLST.orderBadge(p.factions_order), " (from their email; for life)") : h("p", { class: "muted small" }, "No faction until they have an email."),
         h("form", { class: "form", onsubmit: async (e) => {
           e.preventDefault();
           await run(() => api("PATCH", `/players/${id}`, values(e.target, { blankAsNull: true })), "Saved");
@@ -1424,15 +1416,27 @@
 
   async function factionsGlobalView() {
     const sub = h("div");
-    const subTabs = tabs([["overview", "Overview"], ["members", "Members"], ["events", "Events"], ["upload", "Bulk upload"]],
+    const subTabs = tabs([["overview", "Overview"], ["members", "Members"], ["events", "Events"], ["games", "Points from games"], ["upload", "Bulk upload"]],
       (s) => factionsSub(s, sub), "overview", { size: "medium" });
     mount(view, subTabs.el, sub);
     factionsSub("overview", sub);
   }
 
+  /** Which tournaments and league divisions earn Factions points (each player's games count for their faction). */
+  async function fxGames(el) {
+    const list = await get("/tournaments");
+    const box = h("div");
+    const pick = select("fx-t", [["", "Choose a tournament or league division…"], ...list.map((t) => [t.id, `${t.name}${t.season ? ` (${t.season})` : ""}${t.factions_event_id ? " ✓" : ""}`])], "", {
+      onchange: async (e) => (e.target.value ? factionsView(await get(`/tournaments/${e.target.value}`), box) : mount(box)),
+    });
+    mount(el, h("div", { class: "card" }, h("h2", null, "Points from games"),
+      h("p", { class: "muted small" }, "Factions runs separately from stats: nothing about factions shows on scores, standings or player pages. Pick which tournaments and league divisions earn faction points (✓ = counting); points then update by themselves as games go final."),
+      field("Tournament or league division", pick)), box);
+  }
+
   function factionsSub(tab, el) {
     mount(el, h("p", { class: "muted" }, "Loading…"));
-    const fn = { overview: fxOverview, members: fxMembers, events: fxEvents, upload: fxUpload }[tab];
+    const fn = { overview: fxOverview, members: fxMembers, events: fxEvents, games: fxGames, upload: fxUpload }[tab];
     fn(el).catch((err) => mount(el, h("p", { class: "notice error" }, err.message)));
   }
 

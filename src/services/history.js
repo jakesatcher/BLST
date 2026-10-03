@@ -93,7 +93,7 @@ async function allTime() {
     const r = by.get(p.id) || { skater: emptySkater(), goalie: emptyGoalie(), seasons: new Set(), events: 0 };
     return {
       player_id: p.id, name: `${p.first_name} ${p.last_name}`, first_name: p.first_name, last_name: p.last_name,
-      position: p.position, player_code: p.player_code, factions_order: p.factions_order ?? null,
+      position: p.position, player_code: p.player_code,
       events: r.events, seasons: r.seasons.size,
       skater: finishSkater(r.skater), goalie: finishGoalie(r.goalie),
     };

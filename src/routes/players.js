@@ -12,8 +12,9 @@ const POSITIONS = ["C", "LW", "RW", "F", "D", "G"];
 // Allow-list, so a new private column can't leak by default. Email, birth
 // date, LeagueApps id and the Factions member id (a reversible encoding of
 // the email) are only ever returned to admins.
+// Factions is a separate section, so its data isn't part of player records here.
 const PUBLIC_FIELDS = ["id", "first_name", "last_name", "position", "shoots", "preferred_number", "external_id",
-  "factions_order", "player_code", "created_at", "updated_at"];
+  "player_code", "created_at", "updated_at"];
 function serialize(p, req) {
   if (hasRole(req, "admin")) return p;
   return Object.fromEntries(PUBLIC_FIELDS.filter((k) => k in p).map((k) => [k, p[k]]));
@@ -69,23 +70,7 @@ router.get("/players/:id", async (req, res) => {
       WHERE re.player_id = $1 ORDER BY t.start_date DESC NULLS LAST`,
     [id],
   );
-  // Factions standing: Order, points and awards (no email or member id).
-  const factions = player.factions_player_id
-    ? await db.one(
-      `SELECT m.order_slug, m.bonus_points, COALESCE(ep.points, 0)::int AS event_points, m.bonus_points + COALESCE(ep.points, 0)::int AS total_points,
-              COALESCE((SELECT json_agg(json_build_object('title', a.title, 'awarded_at', a.awarded_at, 'event', e.name) ORDER BY a.awarded_at DESC)
-                          FROM faction_achievements a LEFT JOIN faction_events e ON e.id = a.event_id WHERE a.member_id = m.id), '[]') AS achievements,
-              COALESCE((SELECT json_agg(json_build_object('event', e.name, 'tournament_id', t.id, 'points', fp.points_earned, 'placement', fp.placement)
-                                        ORDER BY e.start_date DESC NULLS LAST)
-                          FROM faction_participation fp JOIN faction_events e ON e.id = fp.event_id
-                          LEFT JOIN tournaments t ON t.factions_event_id = e.id WHERE fp.member_id = m.id), '[]') AS events
-         FROM faction_members m
-         LEFT JOIN (SELECT member_id, sum(points_earned) AS points FROM faction_participation GROUP BY member_id) ep ON ep.member_id = m.id
-        WHERE m.id = $1`,
-      [player.factions_player_id],
-    )
-    : null;
-  res.json({ ...serialize(player, req), rosters, factions });
+  res.json({ ...serialize(player, req), rosters });
 });
 
 router.get("/players/:id/career", async (req, res) => {

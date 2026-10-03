@@ -179,7 +179,7 @@ router.get("/export/players/:id", exportAccess, async (req, res) => {
 router.get("/export/players", exportAccess, async (req, res) => {
   const rows = await db.many(`SELECT ${data.PUBLIC_PLAYER_COLS} FROM players p ORDER BY lower(p.last_name), lower(p.first_name)`);
   send(req, res, "players", { exported_at: new Date().toISOString(), schema_version: 1, players: rows }, rows,
-    ["id", "first_name", "last_name", "position", "shoots", "preferred_number", "external_id", "factions_order"]);
+    ["id", "first_name", "last_name", "position", "shoots", "preferred_number", "external_id"]);
 });
 
 module.exports = router;

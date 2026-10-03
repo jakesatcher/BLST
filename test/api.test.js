@@ -322,7 +322,8 @@ test("BLPA Factions: players join their Order, tournament points and achievement
   assert.equal(sam.factions_order, factions.assignOrder("sam@example.com"));
   const pubSam = (await api("GET", `/players/${S.p.Sam}`, undefined, null)).body;
   assert.equal(pubSam.factions_player_id, undefined, "member id is PII");
-  assert.equal(pubSam.factions_order, sam.factions_order, "Order is public");
+  assert.equal(pubSam.factions_order, undefined, "Factions is a separate section: not part of public player records");
+  assert.equal(pubSam.factions, undefined);
 
   const link = await api("POST", `/tournaments/${S.tid}/factions/link`, {});
   assert.equal(link.status, 200);

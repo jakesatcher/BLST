@@ -293,7 +293,7 @@ Emails and Factions player IDs (a reversible encoding of the email) are only eve
 
 ## Factions
 
-Factions is an optional feature: each organization's admin turns it on under
+Factions is a separate section with its own page and admin area: nothing about factions appears on scores, standings, rosters or player stats. It's optional: each organization's admin turns it on under
 **Admin → Organization** and designs its own factions (name, emoji, colour), or
 starts from a ready-made set (BLPA's six Orders, or four colours). When it's
 off, the Factions page, menu item and badges are hidden.

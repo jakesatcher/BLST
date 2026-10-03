@@ -322,8 +322,8 @@ test("Audit F3 / API3: public tournament and player data is allow-listed", async
   assert.deepEqual((await api("GET", `/tournaments/${t.tid}`)).body.leagueapps_program_ids, ["12345"], "admins still see it");
   const p = (await api("POST", "/players", { first_name: "Allow", last_name: "List", email: "allow.list@example.com" })).body;
   const pub = (await call("GET", `/players/${p.id}`)).body;
-  const allowed = ["id", "first_name", "last_name", "position", "shoots", "preferred_number", "external_id", "factions_order", "player_code",
-    "created_at", "updated_at", "rosters", "factions"];
+  const allowed = ["id", "first_name", "last_name", "position", "shoots", "preferred_number", "external_id", "player_code",
+    "created_at", "updated_at", "rosters"];
   assert.deepEqual(Object.keys(pub).filter((k) => !allowed.includes(k)), []);
 });
 

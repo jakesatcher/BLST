@@ -78,9 +78,7 @@ nothing is counted twice.
 **Public:**
 - **Factions** page (`/factions`): faction standings, standings by event,
   and top members.
-- **Stats page:** a faction standings strip.
-- **Tournament page:** a Factions tab.
-- **Player page:** the player's faction, points, events and achievements.
+Factions is kept apart from stats: scores, standings, rosters and player pages show no faction data.
 
 Public pages show names and totals only, never emails.
 
@@ -91,7 +89,7 @@ Public pages show names and totals only, never emails.
   - **Members:** search, add, bonus points, achievements;
   - **Events:** events that aren't tournaments, and recording participation by hand;
   - **Bulk upload:** a CSV with an email column and optional name; preview first.
-- **Admin → Tournaments → (tournament) → Factions:**
+- **Admin → Factions → Points from games** (pick a tournament or league division):
   - *Count this tournament for Factions*;
   - point values;
   - a preview of points per player;
