@@ -146,11 +146,20 @@ function createApp() {
   // domain: the platform (sign in, request an organization, approvals).
   const page = (name) => path.join(__dirname, "..", "public", `${name}.html`);
   const ORG_PAGES = /^\/(stats|league|history|club|setup|factions|admin|scorekeeper|tournament|game|player|watch|overlay|api)(\.html)?\/?$|^\/index\.html$/;
-  app.use((req, res, next) => {
+  app.use(async (req, res, next) => {
     if (req.method !== "GET" && req.method !== "HEAD") return next();
     if (req.orgMissing && (req.path === "/" || ORG_PAGES.test(req.path))) return res.status(404).type("html").send(missingOrgPage(req.orgMissing));
     if (req.path === "/") return req.org ? res.redirect(302, "/stats") : res.sendFile(page("platform"));
-    if (!req.org && ORG_PAGES.test(req.path)) return res.redirect(302, "/");
+    if (!req.org && ORG_PAGES.test(req.path)) {
+      // An old link to a league page on the main site: on to that league's address.
+      if (config.appDomain && config.legacyOrg && req.path !== "/index.html") {
+        const legacy = await require("./middleware/org").findOrg(config.legacyOrg).catch(() => null);
+        if (legacy && legacy.status === "active") {
+          return res.redirect(301, `${require("./routes/platform").orgUrl(legacy.slug, req)}${req.originalUrl}`);
+        }
+      }
+      return res.redirect(302, "/");
+    }
     if (/^\/factions(\.html)?\/?$/.test(req.path) && !req.org.factions_enabled) return res.redirect(302, "/stats");
     if (/^\/stats\/?$/.test(req.path)) return res.sendFile(page("index"));
     if (/^\/platform\/?$/.test(req.path)) return res.sendFile(page("platform-admin"));

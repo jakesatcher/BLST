@@ -41,6 +41,18 @@ router.get("/org", (req, res) => {
   });
 });
 
+/** The landing page's directory: every live league and its address. */
+router.get("/platform/leagues", async (req, res) => {
+  const rows = await withOrg("*", () => db.many(
+    `SELECT o.slug, o.name,
+            (SELECT count(*) FROM games g WHERE g.org_id = o.id AND g.status IN ('live', 'intermission'))::int AS live_games,
+            (SELECT count(*) FROM leagues l WHERE l.org_id = o.id)::int AS leagues,
+            (SELECT count(*) FROM tournaments t WHERE t.org_id = o.id AND t.kind <> 'league')::int AS tournaments
+       FROM organizations o WHERE o.status = 'active' ORDER BY lower(o.name)`));
+  res.set("Cache-Control", "public, max-age=30");
+  res.json(rows.map((o) => ({ ...o, url: orgUrl(o.slug, req) })));
+});
+
 function checkSlug(raw) {
   const slug = String(raw || "").trim().toLowerCase();
   if (!SLUG_RE.test(slug)) throw badRequest("the address can use letters, numbers and dashes (2-40), like \"metro-hockey\"");

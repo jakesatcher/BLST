@@ -101,9 +101,13 @@ least-privilege database login, and prints a one-time setup key to its log.
 Then open the site → **Admin & setup** → **Set up the admin account** with the
 setup key.
 
-For organizations on their own addresses, add the custom domain
-`beerleaguestats.hockey` **and** the wildcard `*.beerleaguestats.hockey` to the
-service and set `APP_DOMAIN=beerleaguestats.hockey`. See
+For leagues on their own addresses (`blpa.beerleaguestats.hockey`,
+`gurha.beerleaguestats.hockey` …), add the custom domains
+`beerleaguestats.hockey`, `www.beerleaguestats.hockey` **and** the wildcard
+`*.beerleaguestats.hockey` to the service and set
+`APP_DOMAIN=beerleaguestats.hockey`. The main address then becomes a landing
+site listing every league, and old links to BLPA's pages there redirect to
+`blpa.beerleaguestats.hockey`. See
 [docs/RAILWAY.md](docs/RAILWAY.md#organizations-on-their-own-addresses).
 
 ## Deploying to Heroku (for testing)

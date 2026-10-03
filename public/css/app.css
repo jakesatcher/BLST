@@ -840,3 +840,48 @@ a.card.game-card strong { font-family: var(--display); font-weight: 600; font-si
     linear-gradient(180deg, #17315a, #091424); }
   a.card.game-card:not(.games *) { border-top-color: var(--accent); }
 }
+
+/* Main site landing (beerleaguestats.hockey) */
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.landing-hero { padding-top: clamp(30px, 6vw, 60px); padding-bottom: clamp(30px, 6vw, 56px); }
+.landing-hero h1 { font-size: clamp(2.4rem, 8vw, 4.6rem); }
+.hero-cta { margin-top: 22px; gap: 10px; }
+.hero-cta .btn { min-height: 48px; padding: 10px 22px; font-family: var(--display); font-weight: 500; text-transform: uppercase; letter-spacing: 0.06em; font-size: 1.02rem; }
+.btn.ghost-light { background: rgba(255, 255, 255, 0.08); border: 1px solid rgba(255, 255, 255, 0.35); color: #fff; }
+.btn.ghost-light:hover { background: rgba(255, 255, 255, 0.16); }
+.jump { max-width: 680px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 12px; }
+.jump-row { flex: 1; min-width: 240px; flex-direction: row; align-items: center; gap: 0; color: var(--text);
+  border: 1px solid var(--border); border-radius: 10px; background: var(--surface); overflow: hidden; }
+.jump-row input { flex: 1; min-width: 0; border: 0; border-radius: 0; text-align: right; font-family: var(--display); font-size: 1.15rem; letter-spacing: 0.02em; }
+.jump-row input:focus-visible { outline: none; }
+.jump-row:focus-within { outline: 3px solid rgba(31, 95, 214, 0.45); }
+.jump-domain { padding: 0 12px 0 2px; color: var(--muted); font-family: var(--display); font-size: 1.15rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; }
+.jump button { min-width: 90px; min-height: 46px; }
+.league-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr)); }
+.league-tile {
+  position: relative; display: flex; flex-direction: column; gap: 4px; padding: 16px; border-radius: 14px; overflow: hidden;
+  color: var(--board-ink); text-decoration: none !important;
+  background:
+    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.05) 1px, transparent 1.2px) 0 0 / 6px 6px,
+    linear-gradient(180deg, #13243d, var(--board));
+  border: 1px solid #22385a; box-shadow: 0 12px 26px -16px rgba(5, 12, 24, 0.9);
+  transition: transform 0.12s ease, border-color 0.12s ease;
+}
+.league-tile::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 3px; background: linear-gradient(90deg, #1f5fd6 33%, var(--red) 33% 67%, #1f5fd6 67%); }
+.league-tile:hover { transform: translateY(-2px); border-color: #4a78c4; }
+.league-tile strong { font-family: var(--display); font-weight: 600; font-size: 1.35rem; text-transform: uppercase; letter-spacing: 0.02em; margin-top: 8px; color: #fff; }
+.league-mark {
+  display: inline-flex; align-items: center; justify-content: center; min-width: 46px; height: 46px; padding: 0 8px; border-radius: 50%;
+  font-family: var(--display); font-weight: 600; font-size: 1.05rem; letter-spacing: 0.04em; color: var(--led);
+  background: radial-gradient(circle at 50% 35%, #263b5c, #0b1626 70%); border: 2px solid rgba(255, 201, 74, 0.5);
+}
+.league-url { color: var(--led); font-family: var(--display); letter-spacing: 0.03em; font-size: 0.95rem; overflow-wrap: anywhere; }
+.league-meta { color: var(--board-muted); font-size: 0.85rem; }
+.feature-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); }
+.feature { margin: 0; border-top: 4px solid var(--red); }
+.feature:nth-child(even) { border-top-color: var(--accent); }
+.feature-icon { font-size: 1.8rem; line-height: 1; }
+.feature h3 { margin: 10px 0 6px; }
+.feature p { margin: 0; color: var(--muted); }
+#start .auth-card { margin-top: 0; }
+#leagues, #start { scroll-margin-top: 16px; }

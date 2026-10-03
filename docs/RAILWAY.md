@@ -156,7 +156,8 @@ One `blst` service serves every organization. The bare domain is the platform
 `<org>.<domain>`, with `/stats`, `/factions` and `/admin` pages.
 
 1. In the service's **Settings → Networking → Custom Domain**, add
-   `beerleaguestats.hockey` **and** `*.beerleaguestats.hockey`.
+   `beerleaguestats.hockey`, `www.beerleaguestats.hockey` **and**
+   `*.beerleaguestats.hockey`.
 2. At your DNS provider, add exactly the records Railway shows for each: a
    CNAME for the bare domain (or ALIAS/ANAME/flattened CNAME, which most DNS
    providers offer at the root), a CNAME for `*`, the `_acme-challenge` CNAME
@@ -169,7 +170,15 @@ One `blst` service serves every organization. The bare domain is the platform
    ```
 
 Then:
-- `https://beerleaguestats.hockey` is the platform. Sign in there with the
+- `https://beerleaguestats.hockey` and `https://www.beerleaguestats.hockey`
+  are the landing site: what Beer League Stats is, every live league with a
+  link to its address, a "find your league" box, and sign-in to ask for a new
+  league. It isn't tied to any league.
+- Old links to league pages on the main address
+  (`beerleaguestats.hockey/stats`, `/tournament?id=…`) redirect to the same
+  page at `blpa.beerleaguestats.hockey`. `LEGACY_ORG` picks a different
+  league; an empty value turns the redirect off.
+- `https://beerleaguestats.hockey` is also the platform. Sign in there with the
   admin account you set up and open **Platform admin** to approve organizations.
 - Your first organization is `blpa`: `https://blpa.beerleaguestats.hockey/stats`.
   Rename it or change its address under Platform admin.

@@ -61,6 +61,10 @@ module.exports = {
   // the bare domain is the platform. Without APP_DOMAIN every host serves
   // DEFAULT_ORG, which is how a single-league install keeps working.
   appDomain: (process.env.APP_DOMAIN || "").toLowerCase().replace(/^https?:\/\//, "").replace(/\/.*$/, ""),
+  // Links to league pages on the main site from before organizations had
+  // their own addresses (beerleaguestats.hockey/stats …) go to this
+  // organization's address instead.
+  legacyOrg: (process.env.LEGACY_ORG ?? "blpa").toLowerCase(),
   defaultOrg: process.env.DEFAULT_ORG !== undefined ? process.env.DEFAULT_ORG.toLowerCase() : process.env.APP_DOMAIN ? "" : "blpa",
   auth: {
     // Keys the one-time-code hashes. Without the config var the server

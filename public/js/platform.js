@@ -1,33 +1,95 @@
-/* The platform home (the bare domain): what Beer League Stats is, sign in,
-   your organizations, and asking for a new one (a platform admin approves). */
+/* The main site (beerleaguestats.hockey / www): a landing page that isn't
+   any one league. Every league lives at its own address
+   (<league>.beerleaguestats.hockey); this page points people there, and
+   lets someone sign in and ask for a new league (a platform admin approves). */
 (async function () {
   const { h, mount, api, get, $, topbar, tabs, toast, debounce, signInFlow, signOut } = BLST;
   $("#top").replaceWith(topbar("index"));
   const app = $("#app");
+  await BLST.ready;
   const STATUS = { pending: "Waiting for approval", active: "Live", suspended: "Suspended", rejected: "Not approved" };
+  const domain = (BLST.platform && BLST.platform.app_domain) || location.host.replace(/^www\./, "");
 
-  const [status, me] = await Promise.all([get("/auth/status"), get("/me").catch(() => ({}))]);
-  const intro = h("section", { class: "card platform-hero" },
+  const [status, me, leagues] = await Promise.all([
+    get("/auth/status"), get("/me").catch(() => ({})), get("/platform/leagues").catch(() => []),
+  ]);
+  const live = leagues.reduce((a, l) => a + l.live_games, 0);
+  /** "BLPA" → BLPA; "Metro Beer League" → MBL */
+  const monogram = (name) => {
+    const words = String(name).split(/[\s-]+/).filter(Boolean);
+    return (words.length === 1 ? words[0].slice(0, 5) : words.slice(0, 3).map((w) => w[0]).join("")).toUpperCase();
+  };
+
+  // ---- Hero
+  const hero = h("section", { class: "rink-hero landing-hero" },
+    h("div", { class: "kicker" }, "Hockey stats for beer leagues"),
     h("h1", null, "Beer League Stats"),
-    h("p", null, "Live scoring, stats and standings for your league, with optional Factions for player engagement."),
-    h("p", { class: "small muted" }, "Each organization gets its own address, like ", h("b", null, "yourleague.", location.host), ", with Stats, Factions and Admin pages."));
-  if (me.via !== "session") return renderSignedOut();
-  renderSignedIn();
+    h("p", { class: "sub" }, "Live scoring from the bench, stat leaders, standings and every season's history, for your league, at your league's own address."),
+    h("div", { class: "row hero-cta" },
+      h("a", { class: "btn primary", href: "#leagues" }, "Find your league"),
+      h("a", { class: "btn ghost-light", href: "#start" }, "Start a league")),
+    h("div", { class: "tally" },
+      h("div", null, h("strong", null, leagues.length), leagues.length === 1 ? "League" : "Leagues"),
+      h("div", { class: live ? "live" : "" }, h("strong", null, live), "Live now")));
 
+  // ---- Find your league
+  const jump = h("input", { placeholder: "yourleague", autocapitalize: "none", spellcheck: "false", "aria-label": "League address" });
+  const go = (e) => {
+    e.preventDefault();
+    const slug = jump.value.trim().toLowerCase().replace(/\..*$/, "");
+    if (!/^[a-z0-9-]{2,40}$/.test(slug)) return toast("Type your league's address, like blpa", true);
+    const known = leagues.find((l) => l.slug === slug);
+    location.assign(known ? known.url : `${location.protocol}//${slug}.${domain}`);
+  };
+  const directory = h("section", { id: "leagues" },
+    h("div", { class: "section-head" }, h("h2", null, "Find your league")),
+    h("form", { class: "jump card", onsubmit: go },
+      h("label", { class: "jump-row" }, h("span", { class: "sr-only" }, "League address"),
+        jump, h("span", { class: "jump-domain" }, `.${domain}`)),
+      h("button", { class: "primary" }, "Go")),
+    leagues.length
+      ? h("div", { class: "league-grid" }, leagues.map((l) => h("a", { class: "league-tile", href: `${l.url}/stats` },
+        h("div", { class: "row between" },
+          h("span", { class: "league-mark" }, monogram(l.name)),
+          l.live_games ? h("span", { class: "badge live" }, `${l.live_games} live`) : ""),
+        h("strong", null, l.name),
+        h("span", { class: "league-url" }, l.url.replace(/^https?:\/\//, "")),
+        h("span", { class: "league-meta" }, [l.leagues ? `${l.leagues} league${l.leagues === 1 ? "" : "s"}` : null, l.tournaments ? `${l.tournaments} tournament${l.tournaments === 1 ? "" : "s"}` : null].filter(Boolean).join(" · ") || "Just getting started"))))
+      : h("p", { class: "muted" }, "No leagues yet. Be the first."));
+
+  // ---- What it does
+  const features = h("section", null,
+    h("div", { class: "section-head" }, h("h2", null, "What your league gets")),
+    h("div", { class: "feature-grid" }, [
+      ["⏱", "Live scoring at the rink", "Run the clock, goals, assists and penalties from an iPad on the bench. Scores update on everyone's phone as they happen."],
+      ["🏒", "Stats and leaders", "Goals, assists, PIM, save % and more, for every game, season and division, with leader boards on the front page."],
+      ["🏆", "Seasons and history", "Divisions, standings, playoffs and career stats that follow players across teams, plus player ratings."],
+      ["🔌", "Bring what you have", "Import old seasons from spreadsheets, stat sites, Google Sheets, SportsEngine or LeagueApps."],
+    ].map(([icon, title, text]) => h("div", { class: "card feature" }, h("div", { class: "feature-icon", "aria-hidden": "true" }, icon), h("h3", null, title), h("p", null, text)))));
+
+  const start = h("section", { id: "start" });
+  mount(app, hero, directory, features, start);
+  if (me.via === "session") renderSignedIn();
+  else renderSignedOut();
+
+  // ---- Run a league: sign in, your leagues, ask for a new one
   function renderSignedOut() {
     const box = h("div");
-    const names = [["login", "Sign in"], ["signup", "Create account"]];
+    const names = [["signup", "Create account"], ["login", "Sign in"]];
     if (status.setup_needed) names.push(["setup", "Set up admin"]);
-    // A new install has no accounts yet: "Sign in" can't work, so start at setup.
-    const initial = status.setup_needed ? "setup" : location.hash === "#signup" ? "signup" : "login";
+    const initial = status.setup_needed ? "setup" : location.hash === "#login" ? "login" : "signup";
     const intros = {
       login: "We'll email you a code. Admins and scorekeepers then use their authenticator app or passkey. No password needed.",
-      signup: "Create an account, then ask for your organization. All we keep is your email address.",
+      signup: "Create an account, then ask for your league's address. All we keep is your email address.",
       setup: "No admin account exists yet. Enter the setup key from the server log (or ADMIN_TOKEN) to create the platform admin.",
     };
     const bar = tabs(names, (id) => signInFlow(box, { mode: id, intro: intros[id], onDone: renderSignedIn }), initial, { size: "medium" });
-    mount(app, intro, h("div", { class: "card auth-card" }, h("h2", null, "Get started"), bar.el, box,
-      status.dev_codes ? h("p", { class: "notice small" }, "Development server: codes are printed in the server log.") : ""));
+    mount(start,
+      h("div", { class: "section-head" }, h("h2", null, "Start a league")),
+      h("div", { class: "card auth-card" },
+        h("p", { class: "muted small" }, "Players and fans don't need an account: they just visit the league's address. To run a league, create an account and ask for one."),
+        bar.el, box,
+        status.dev_codes ? h("p", { class: "notice small" }, "Development server: codes are printed in the server log.") : ""));
     signInFlow(box, { mode: initial, intro: intros[initial], onDone: renderSignedIn });
   }
 
@@ -40,13 +102,14 @@
         o.status === "active"
           ? h("div", { class: "row" }, h("a", { class: "btn primary", href: `${o.url}/stats` }, "Open"), o.role === "admin" ? h("a", { class: "btn", href: `${o.url}/admin` }, "Admin") : "")
           : h("span", { class: `badge${o.status === "pending" ? "" : " bad"}` }, STATUS[o.status]))))
-      : h("p", { class: "muted" }, "You aren't part of an organization yet. Ask for one below, or ask your league's admin to invite this email address.");
-    mount(app, intro,
+      : h("p", { class: "muted" }, "You aren't part of a league yet. Ask for one below, or ask your league's admin to invite this email address.");
+    mount(start,
+      h("div", { class: "section-head" }, h("h2", null, "Your leagues")),
       acct.staff && !acct.mfa.enabled ? h("section", { class: "card" },
-        h("p", { class: "notice" }, "Your account can run an organization. Set up an authenticator app or passkey to use that access."),
+        h("p", { class: "notice" }, "Your account can run a league. Set up an authenticator app or passkey to use that access."),
         h("a", { class: "btn primary", href: "/account#security" }, "Set it up")) : "",
-      h("section", { class: "card" }, h("h2", null, "Your organizations"), list,
-        h("p", { class: "small muted" }, "Signed in as ", acct.email, ". Each organization's address has its own sign-in."),
+      h("section", { class: "card" }, list,
+        h("p", { class: "small muted" }, "Signed in as ", acct.email, ". Each league's address has its own sign-in (same account)."),
         h("div", { class: "row" },
           acct.platform_admin ? h("a", { class: "btn primary", href: "/platform" }, "Platform admin") : "",
           h("a", { class: "btn", href: "/account" }, "Account"),
@@ -74,10 +137,10 @@
       check();
     });
     slug.addEventListener("input", () => { slugEdited = true; check(); });
-    const submit = h("button", { class: "primary", type: "submit" }, "Ask for this organization");
+    const submit = h("button", { class: "primary", type: "submit" }, "Ask for this league");
     return h("section", { class: "card" },
-      h("h2", null, "Start an organization"),
-      h("p", { class: "small muted" }, "A platform admin reviews new organizations, usually within a day. You'll get an email when it's live, and you'll be its admin."),
+      h("h2", null, "Start a league"),
+      h("p", { class: "small muted" }, "A platform admin reviews new leagues, usually within a day. You'll get an email when it's live, with a link to set it up, and you'll be its admin."),
       h("form", { class: "org-form", onsubmit: async (e) => {
         e.preventDefault();
         submit.disabled = true;
@@ -90,8 +153,8 @@
           submit.disabled = false;
         }
       } },
-      h("label", null, "Name", name),
-      h("label", null, "Address", h("span", { class: "slug-row" }, slug, h("span", null, ".", location.host))), hint,
+      h("label", null, "League name", name),
+      h("label", null, "Address", h("span", { class: "slug-row" }, slug, h("span", null, `.${domain}`))), hint,
       h("label", null, "Note", note),
       h("div", { class: "row" }, submit)));
   }

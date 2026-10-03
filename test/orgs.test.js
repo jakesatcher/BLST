@@ -82,7 +82,13 @@ test("addresses: the bare domain is the platform, <slug>.domain is that organiza
   assert.equal(page.status, 302);
   assert.equal(page.headers.location, "/stats");
   assert.equal((await call("GET", host(""), "/")).status, 200, "platform landing");
-  assert.equal((await call("GET", host(""), "/admin")).status, 302, "organization pages aren't on the platform");
+  // Old links to league pages on the main site go to BLPA's address, path and query kept.
+  const old = await call("GET", host(""), "/tournament?id=7");
+  assert.equal(old.status, 301, "organization pages aren't on the platform");
+  assert.equal(old.headers.location, "https://blpa.bls.test/tournament?id=7");
+  assert.equal((await call("GET", `www.${DOMAIN}`, "/")).status, 200, "www is the main site too");
+  assert.equal((await call("GET", `www.${DOMAIN}`, "/stats")).headers.location, "https://blpa.bls.test/stats");
+  assert.equal((await api("GET", "", "/org")).body.platform.app_domain, DOMAIN);
   assert.equal((await call("GET", host(""), "/platform")).status, 200, "platform admin page");
   for (const p of ["/stats", "/admin", "/scorekeeper", "/account", "/tournament"]) assert.equal((await call("GET", host("blpa"), p)).status, 200, p);
   // Organization routes don't exist on the platform's own address.
@@ -334,6 +340,21 @@ test("Factions is off until an organization turns it on, with factions it design
   assert.equal((await api("GET", "metro", "/factions/orders")).status, 404);
   await api("PUT", "metro", "/factions-setup", { token: tok, body: { enabled: true } });
   assert.equal((await api("GET", "metro", "/factions/members?q=jane", { token: tok })).body.members[0].id, jane.id);
+});
+
+test("the main site lists every live league with its own address", async () => {
+  const list = (await api("GET", "", "/platform/leagues")).body;
+  const slugs = list.map((o) => o.slug);
+  assert.ok(slugs.includes("blpa") && slugs.includes("metro"), JSON.stringify(slugs));
+  const metro = list.find((o) => o.slug === "metro");
+  assert.equal(metro.url, "https://metro.bls.test");
+  assert.ok(metro.leagues >= 1);
+  assert.equal(typeof metro.live_games, "number");
+  for (const o of list) assert.deepEqual(Object.keys(o).sort(), ["leagues", "live_games", "name", "slug", "tournaments", "url"], "nothing private");
+  // Leagues waiting for approval aren't listed.
+  const tok = S.owner.token;
+  await api("POST", "", "/platform/orgs", { token: tok, body: { name: "Gurha Hockey", slug: "gurha-test" } });
+  assert.ok(!(await api("GET", "", "/platform/leagues")).body.some((o) => o.slug === "gurha-test"));
 });
 
 test("platform admins can suspend an organization", async () => {
