@@ -18,8 +18,9 @@
     played.some((t) => t.kind !== "league") ? h("optgroup", { label: "Tournaments" }, played.filter((t) => t.kind !== "league").map((t) => h("option", { value: t.id }, `${t.name}${t.season ? ` (${t.season})` : ""}`))) : "");
   const panel = (title, list, fmt = (v) => v) => h("div", { class: "card leader-card" }, h("h3", null, title),
     list && list.length
-      ? h("ol", null, list.map((p) => h("li", null, h("a", { href: `/player?id=${p.player_id}` }, p.name),
-        p.team ? h("span", { class: "muted small" }, ` ${p.team}`) : h("span", { class: "muted small" }, ` ${p.gp} GP`), h("span", { class: "v" }, fmt(p.value)))))
+      ? h("ol", null, list.map((p) => h("li", null,
+        h("span", { class: "who" }, h("a", { href: `/player?id=${p.player_id}` }, p.name), h("span", { class: "sub" }, [p.team, `${p.gp} GP`].filter(Boolean).join(" · "))),
+        h("span", { class: "v" }, fmt(p.value)))))
       : h("div", { class: "empty muted" }, "No stats yet"));
   async function drawLeaders() {
     let l;
@@ -29,28 +30,40 @@
       return mount(leadersBox, h("p", { class: "notice error" }, err.message));
     }
     mount(leadersBox,
-      h("h3", { class: "leaders-group" }, "Skaters"),
+      h("div", { class: "leaders-group" }, "Skaters"),
       h("div", { class: "grid three" }, panel("Goals", l.goals), panel("Assists", l.assists), panel("Penalty minutes", l.pim)),
-      h("h3", { class: "leaders-group" }, "Goalies"),
+      h("div", { class: "leaders-group goalies" }, "Goalies"),
       h("div", { class: "grid three" }, panel("Save %", l.save_pct, (v) => fmtPct(v)), panel("Goals against avg", l.gaa, (v) => Number(v).toFixed(2)), panel("Wins", l.wins)),
       l.goalie_min_gp > 1 ? h("p", { class: "muted small" }, `Save % and GAA: goalies with at least ${l.goalie_min_gp} games.`) : "");
   }
 
+  const live = games.filter((g) => g.status === "live" || g.status === "intermission").length;
+  const orgName = BLST.org ? BLST.org.name : "Beer League Stats";
   mount(
     app,
-    awards.length ? h("div", { class: "awards" }, awards.map((a) => h("div", { class: "card award-card" },
-      h("div", { class: "award-title" }, a.title),
-      h("div", { class: "award-name" }, a.player_id ? h("a", { href: `/player?id=${a.player_id}` }, a.name) : a.name),
-      a.note ? h("div", { class: "muted small" }, a.note) : ""))) : "",
-    h("h1", null, "Live & upcoming"),
-    games.length ? cards.el : h("p", { class: "muted" }, "No games today."),
-    h("div", { class: "row between", style: { marginTop: "28px" } }, h("h2", { style: { margin: 0 } }, "Stat leaders"), scope),
+    h("section", { class: "rink-hero" }, h("div", { class: "hero-grid" },
+      h("div", null,
+        h("div", { class: "kicker" }, live ? "Puck's dropped" : "Welcome to the barn"),
+        h("h1", null, orgName),
+        h("p", { class: "sub" }, "Live scores, stat leaders and every season's history, straight from the scorekeeper's bench."),
+        h("div", { class: "tally" },
+          h("div", { class: live ? "live" : "" }, h("strong", null, live), "Live now"),
+          h("div", null, h("strong", null, games.length), "Games today"),
+          leagues.length ? h("div", null, h("strong", null, leagues.length), leagues.length === 1 ? "League" : "Leagues") : "",
+          h("div", null, h("strong", null, tournaments.length), tournaments.length === 1 ? "Tournament" : "Tournaments"))),
+      awards.length ? h("div", { class: "awards" }, awards.map((a) => h("div", { class: "award-card" },
+        h("div", { class: "award-title" }, a.title),
+        h("div", { class: "award-name" }, a.player_id ? h("a", { href: `/player?id=${a.player_id}` }, a.name) : a.name),
+        a.note ? h("div", { class: "muted small" }, a.note) : ""))) : "")),
+    h("div", { class: "section-head", style: { marginTop: "0" } }, h("h2", null, "Live & upcoming")),
+    games.length ? cards.el : h("div", { class: "card empty" }, "No games on the schedule today. Zamboni's out."),
+    h("div", { class: "section-head" }, h("h2", null, "Stat leaders"), scope),
     leadersBox,
-    leagues.length ? [h("h2", { style: { marginTop: "28px" } }, "Leagues"),
+    leagues.length ? [h("div", { class: "section-head" }, h("h2", null, "Leagues")),
       h("div", { class: "grid three" }, leagues.map((l) => h("a", { class: "card game-card", href: `/league?id=${l.id}` },
         h("strong", null, l.name),
         h("div", { class: "muted small" }, `${l.divisions} division${l.divisions === 1 ? "" : "s"}${l.current_season ? ` · ${l.current_season} season` : ""}`))))] : "",
-    h("h2", { style: { marginTop: "28px" } }, "Tournaments"),
+    h("div", { class: "section-head" }, h("h2", null, "Tournaments")),
     tournaments.length
       ? h(
           "div",
