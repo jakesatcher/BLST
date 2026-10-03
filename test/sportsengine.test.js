@@ -214,6 +214,35 @@ test("final whistle sends the score to SportsEngine", async () => {
   assert.equal(state.mutations.length, 2);
 });
 
+test("games already played in SportsEngine come in with their final score and count in standings", async () => {
+  EVENTS.push({ id: "e-0", name: "Last season", type: "game", status: "final", start: "2026-03-01T19:00:00Z", location: { name: "Rink B" },
+    eventTeams: [{ teamId: "t-1", homeTeam: true, score: 2 }, { teamId: "t-2", homeTeam: false, score: 5 }] });
+  const r = await api("POST", `/tournaments/${S.tid}/sportsengine/schedule`, { start: "2026-01-01", end: "2026-12-31" });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.results, 1);
+  const g = (await api("GET", `/tournaments/${S.tid}/games`)).body.find((x) => new Date(x.scheduled_at).toISOString().startsWith("2026-03-01"));
+  assert.equal(g.status, "final");
+  assert.equal(g.result_only, true);
+  const standings = (await api("GET", `/tournaments/${S.tid}/standings`)).body;
+  const rows = Array.isArray(standings) ? standings : standings.standings || standings.rows;
+  const bunnies = rows.find((x) => x.name === "Puck Bunnies");
+  assert.equal(bunnies.w, 1, "the imported win counts");
+  assert.equal(bunnies.gf, 5);
+  const snap = (await api("GET", `/games/${g.id}`)).body;
+  assert.equal(snap.home.score, 2);
+  assert.equal(snap.away.score, 5);
+
+  // No play-by-play to edit: reopening and events are refused; the score itself can be corrected.
+  assert.equal((await api("POST", `/games/${g.id}/reopen`, {})).status, 409);
+  assert.equal((await api("POST", `/games/${g.id}/events`, { type: "goal", player_id: S.sam })).status, 409);
+  const fix = await api("PATCH", `/games/${g.id}`, { away_score: 4 });
+  assert.equal(fix.status, 200, JSON.stringify(fix.body));
+  assert.equal(fix.body.away.score, 4);
+  assert.equal((await api("POST", `/games/${g.id}/sportsengine/result`, {})).status, 400, "nothing to send back");
+  // A live-scored game's score can't be typed over.
+  assert.equal((await api("PATCH", `/games/${S.gid}`, { home_score: 9 })).status, 409);
+});
+
 test("disconnect removes the credentials", async () => {
   assert.equal((await api("DELETE", "/integrations/sportsengine")).status, 204);
   assert.equal((await api("GET", "/integrations/sportsengine")).body.connected, false);

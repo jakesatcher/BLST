@@ -6,6 +6,8 @@ const { intParam, optEnum, notFound } = require("../lib/http");
 const { toCsv } = require("../lib/csv");
 const data = require("../services/data");
 const importer = require("../services/importer");
+const sources = require("../services/sources");
+const historyImport = require("../services/historyImport");
 
 const router = Router();
 const admin = requireRole("admin");
@@ -20,6 +22,22 @@ const exportAccess = (req, res, next) => {
 router.post("/import/historical", admin, async (req, res) => {
   const report = await importer.importHistorical(req.body);
   res.status(report.committed || report.dry_run ? 200 : 422).json(report);
+});
+
+/**
+ * What a history source holds (file, pasted text, link): its columns, a
+ * guess at what each one means, sample rows, and the seasons, divisions and
+ * teams in it. Nothing is imported.
+ */
+router.post("/import/preview", admin, async (req, res) => {
+  res.json(await sources.preview(req.body.source, { sheet: req.body.sheet, mapping: req.body.mapping }));
+});
+
+/** Imports history from any source with a column mapping, into a tournament or a league (see historyImport.js). */
+router.post("/import/history", admin, async (req, res) => {
+  const out = await historyImport.run(req.body);
+  const ok = out.groups.some((g) => g.committed) || req.body.dry_run;
+  res.status(ok ? 200 : 422).json(out);
 });
 
 /** What an upload's Tournament ID (city + type + year) points at, before uploading. */

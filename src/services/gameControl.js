@@ -268,10 +268,13 @@ async function endGame(gameId, body = {}) {
 async function reopenGame(gameId) {
   const game = await db.one(
     `UPDATE games SET status = 'intermission', decision = NULL, ended_at = NULL, final_elapsed_sec = NULL, updated_at = now()
-      WHERE id = $1 AND status = 'final' RETURNING *`,
+      WHERE id = $1 AND status = 'final' AND NOT result_only RETURNING *`,
     [gameId],
   );
-  if (!game) throw conflict("only a final game can be reopened");
+  if (!game) {
+    const g = await db.one("SELECT result_only FROM games WHERE id = $1", [gameId]);
+    throw conflict(g && g.result_only ? "this game's result was imported (no play-by-play); edit its score instead" : "only a final game can be reopened");
+  }
   const snapshot = await publish(gameId, "game.reopened");
   emitDomain("game.reopened", { game_id: gameId, tournament_id: game.tournament_id });
   return snapshot;
@@ -390,6 +393,7 @@ const EVENT_COLUMNS = [
 async function createEvent(gameId, body) {
   const bundle = await data.loadGameBundle(gameId);
   if (bundle.game.status === "scheduled") throw conflict("start the game before recording events");
+  if (bundle.game.result_only) throw conflict("this game's result was imported (no play-by-play); edit its score instead");
   const e = completeEvent(parseEventBody(body, { partial: false }), bundle);
   const cols = EVENT_COLUMNS.filter((c) => e[c] !== undefined);
   const row = await db.one(

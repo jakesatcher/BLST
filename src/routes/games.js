@@ -75,10 +75,18 @@ router.patch("/games/:id", admin, async (req, res) => {
     if (!team) throw badRequest(`${side} is not in this tournament`);
     fields[side] = team.id;
   }
+  // Imported results (no play-by-play) keep their score here.
+  for (const side of ["home_score", "away_score"]) {
+    if (req.body[side] === undefined) continue;
+    if (!current.result_only) throw conflict("this game's score comes from its goals; edit those instead");
+    fields[side] = optInt(req.body[side], side, { min: 0, max: 99 });
+  }
   const upd = buildUpdate(fields, 2);
   if (!upd) throw badRequest("nothing to update");
   await db.query(`UPDATE games SET ${upd.set}, updated_at = now() WHERE id = $1`, [id, ...upd.values]);
-  res.json(await control.publish(id, "game.updated"));
+  const snap = await control.publish(id, "game.updated");
+  if (current.result_only) require("../lib/bus").emitDomain("game.updated", { game_id: id, tournament_id: current.tournament_id });
+  res.json(snap);
 });
 
 router.delete("/games/:id", admin, async (req, res) => {

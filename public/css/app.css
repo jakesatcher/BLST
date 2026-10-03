@@ -503,3 +503,22 @@ button.link { background: none; border: 0; padding: 6px 0; color: var(--accent);
   background: linear-gradient(90deg, var(--accent) var(--r), #64748b var(--r)); }
 .rating-why summary { cursor: pointer; color: var(--accent); font-size: 0.85rem; }
 .rating-why ul { margin: 6px 0 0; padding-left: 18px; min-width: 260px; }
+
+/* League setup wizard */
+.setup-steps { margin: 4px 0 16px; flex-wrap: wrap; }
+.setup-steps button { flex: 1; min-width: 92px; border-radius: 999px; padding: 8px 10px; background: var(--surface-2); color: var(--muted); border-color: transparent; font-size: 0.85rem; font-weight: 600; }
+.setup-steps button.now { background: var(--accent); color: var(--accent-ink); }
+.setup-steps button.done { background: var(--good); color: #fff; }
+.setup-divisions { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.setup-division { margin: 0; }
+.setup-division textarea { width: 100%; }
+.setup-footer { margin-top: 14px; flex-wrap: wrap; gap: 8px; }
+.map-table td { white-space: normal; }
+.map-table select { max-width: 100%; }
+.map-table .ex-inline { display: none; }
+@media (max-width: 600px) {
+  .map-table .ex { display: none; }
+  .map-table .ex-inline { display: block; }
+  .map-table td:last-child { width: 55%; }
+  .map-table select { width: 100%; }
+}

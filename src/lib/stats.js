@@ -210,6 +210,12 @@ function computeGameStats({ tournament: t, game, roster, events, now = Date.now(
   }
   for (const g of goalies.values()) g.gp = g.toi_sec > 0 || g.shots_against > 0 ? 1 : 0;
 
+  // A result from another system (no play-by-play): its stored score.
+  if (game.result_only) {
+    teams[home].goals = Number(game.home_score) || 0;
+    teams[away].goals = Number(game.away_score) || 0;
+  }
+
   // Result.
   const score = { [home]: teams[home].goals, [away]: teams[away].goals };
   let decision = game.decision || null;

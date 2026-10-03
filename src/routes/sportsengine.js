@@ -47,6 +47,7 @@ router.post("/tournaments/:id/sportsengine/teams", admin, async (req, res) => {
 router.post("/tournaments/:id/sportsengine/schedule", admin, async (req, res) => {
   res.json(await se.importSchedule(intParam(req.params.id), {
     start: optString(req.body.start, "start", { max: 40 }), end: optString(req.body.end, "end", { max: 40 }),
+    include_results: optBool(req.body.include_results, "include_results") ?? true,
   }));
 });
 

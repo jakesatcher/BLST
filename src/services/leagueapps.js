@@ -1,5 +1,8 @@
 const crypto = require("crypto");
+const { execFile } = require("child_process");
 const db = require("../db");
+const box = require("../lib/secretbox");
+const { currentOrg } = require("../lib/context");
 const { HttpError, conflict } = require("../lib/http");
 const { emitDomain } = require("../lib/bus");
 const registrations = require("./registrations");
@@ -38,27 +41,48 @@ const FIELD_CANDIDATES = {
   registered_at: ["registrationDate", "created", "createdAt", "dateCreated"],
 };
 
-function settings() {
+/** LeagueApps settings from the server's environment (one organization). */
+function envSettings() {
   const key = (process.env.LEAGUEAPPS_PRIVATE_KEY || "").replace(/\\n/g, "\n").trim();
   return {
     siteId: (process.env.LEAGUEAPPS_SITE_ID || "").trim(),
     clientId: (process.env.LEAGUEAPPS_CLIENT_ID || "").trim(),
     privateKey: key,
-    apiBase: (process.env.LEAGUEAPPS_API_BASE || "https://public.leagueapps.io").replace(/\/+$/, ""),
-    authUrl: process.env.LEAGUEAPPS_AUTH_URL || AUDIENCE,
-    audience: process.env.LEAGUEAPPS_AUTH_AUDIENCE || AUDIENCE,
   };
 }
 
-// The LeagueApps credentials are server settings, so they belong to one
-// organization (LEAGUEAPPS_ORG_ID, default 1 = BLPA). Other organizations
-// see LeagueApps as not connected.
+const endpoints = () => ({
+  apiBase: (process.env.LEAGUEAPPS_API_BASE || "https://public.leagueapps.io").replace(/\/+$/, ""),
+  authUrl: process.env.LEAGUEAPPS_AUTH_URL || AUDIENCE,
+  audience: process.env.LEAGUEAPPS_AUTH_AUDIENCE || AUDIENCE,
+});
+
+// Each organization connects its own LeagueApps account (Admin →
+// Integrations); credentials live encrypted in leagueapps_connections. The
+// older server settings (LEAGUEAPPS_*) still work for one organization
+// (LEAGUEAPPS_ORG_ID, default 1 = BLPA) when it hasn't connected its own.
 const LA_ORG_ID = Number(process.env.LEAGUEAPPS_ORG_ID || 1);
 
-function isConfigured() {
-  const s = settings();
-  return Boolean(s.siteId && s.clientId && s.privateKey) && require("../lib/context").currentOrg() === LA_ORG_ID;
+async function connectionRow() {
+  return db.one("SELECT * FROM leagueapps_connections WHERE org_id = blst_org()");
 }
+
+/** This organization's LeagueApps settings (source: "organization", "server" or null). */
+async function settings() {
+  const row = await connectionRow();
+  if (row) {
+    return { ...endpoints(), siteId: row.site_id, clientId: row.client_id, privateKey: box.open("leagueapps-key", row.private_key_enc), source: "organization", row };
+  }
+  const env = envSettings();
+  if (env.siteId && env.clientId && env.privateKey && currentOrg() === LA_ORG_ID) return { ...endpoints(), ...env, source: "server" };
+  return { ...endpoints(), siteId: "", clientId: "", privateKey: "", source: null };
+}
+
+async function isConfigured() {
+  return Boolean((await settings()).source);
+}
+
+const NOT_CONNECTED = "LeagueApps isn't connected for this organization (Admin → Integrations → LeagueApps)";
 
 const b64url = (buf) => Buffer.from(buf).toString("base64url");
 
@@ -72,34 +96,37 @@ function buildAssertion(s, now = Math.floor(Date.now() / 1000)) {
   try {
     signature = signer.sign(s.privateKey);
   } catch {
-    throw new HttpError(500, "LEAGUEAPPS_PRIVATE_KEY isn't a valid PEM private key (convert the .p12 with openssl, see README)");
+    throw new HttpError(400, "The LeagueApps private key isn't valid (upload the .p12 file from LeagueApps, or paste the key as PEM)");
   }
   return `${header}.${payload}.${b64url(signature)}`;
 }
 
-let tokenCache = null;
+const tokenCache = new Map(); // `${org}:${clientId}` -> { token, expires }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const timing = { slotMs: 1420, maxAttempts: 5 }; // sample.py: 1.42s slots, 5 attempts
 
-async function accessToken(force = false) {
-  const s = settings();
-  if (!force && tokenCache && tokenCache.expires > Date.now()) return tokenCache.token;
+async function accessToken(force = false, given = null) {
+  const s = given || (await settings());
+  const cacheKey = `${currentOrg()}:${s.clientId}`;
+  const cached = tokenCache.get(cacheKey);
+  if (!force && cached && cached.expires > Date.now()) return cached.token;
   const res = await fetch(s.authUrl, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: buildAssertion(s) }),
     signal: AbortSignal.timeout(15000),
   });
-  if (!res.ok) throw new HttpError(502, `LeagueApps sign-in failed (HTTP ${res.status}); check LEAGUEAPPS_CLIENT_ID and the private key`);
+  if (!res.ok) throw new HttpError(502, `LeagueApps sign-in failed (HTTP ${res.status}); check the client ID and the private key`);
   const data = await res.json().catch(() => ({}));
   if (typeof data.access_token !== "string") throw new HttpError(502, "LeagueApps sign-in returned no access token");
-  tokenCache = { token: data.access_token, expires: Date.now() + ((Number(data.expires_in) || 900) - 30) * 1000 };
-  return tokenCache.token;
+  tokenCache.set(cacheKey, { token: data.access_token, expires: Date.now() + ((Number(data.expires_in) || 900) - 30) * 1000 });
+  return data.access_token;
 }
 
 /** One export page, with the sample's retry rules. */
 async function exportPage(type, cursor, extra = {}) {
-  const s = settings();
+  const s = await settings();
+  if (!s.source) throw new HttpError(503, NOT_CONNECTED);
   const url = new URL(`${s.apiBase}/v2/sites/${encodeURIComponent(s.siteId)}/export/${type}`);
   url.searchParams.set("last-updated", String(cursor.lastUpdated));
   url.searchParams.set("last-id", String(cursor.lastId));
@@ -108,14 +135,14 @@ async function exportPage(type, cursor, extra = {}) {
   for (let attempt = 1; attempt <= timing.maxAttempts; attempt++) {
     let res;
     try {
-      res = await fetch(url, { headers: { authorization: `Bearer ${await accessToken()}` }, signal: AbortSignal.timeout(30000) });
+      res = await fetch(url, { headers: { authorization: `Bearer ${await accessToken(false, s)}` }, signal: AbortSignal.timeout(30000) });
     } catch {
       await sleep(Math.floor(Math.random() * 2 ** Math.min(attempt, 5)) * timing.slotMs);
       continue;
     }
     if (res.status === 401 && !refreshed) {
       refreshed = true;
-      tokenCache = null;
+      tokenCache.delete(`${currentOrg()}:${s.clientId}`);
       attempt -= 1;
       continue;
     }
@@ -153,8 +180,10 @@ function getPath(obj, path) {
 }
 
 async function fieldMap() {
-  const row = await db.one("SELECT value FROM integration_settings WHERE key = 'leagueapps_field_map'");
-  const override = row ? row.value : {};
+  const conn = await connectionRow();
+  // The server-settings organization keeps its map in integration_settings.
+  const legacy = conn ? null : await db.one("SELECT value FROM integration_settings WHERE key = 'leagueapps_field_map'");
+  const override = conn ? conn.field_map || {} : legacy ? legacy.value : {};
   const map = {};
   for (const [field, names] of Object.entries(FIELD_CANDIDATES)) map[field] = override[field] ? [override[field], ...names] : names;
   return { map, override };
@@ -204,11 +233,11 @@ async function loadCursor() {
  * every page so a failure resumes where it stopped.
  */
 async function sync({ fromScratch = false } = {}) {
-  if (!isConfigured()) throw new HttpError(503, "LeagueApps isn't configured (set LEAGUEAPPS_SITE_ID, LEAGUEAPPS_CLIENT_ID, LEAGUEAPPS_PRIVATE_KEY)");
+  if (!(await isConfigured())) throw new HttpError(503, NOT_CONNECTED);
   const client = await db.connect();
-  const lockKey = 4815162342;
+  const lockKey = `leagueapps-sync:${currentOrg()}`;
   try {
-    const locked = (await client.query("SELECT pg_try_advisory_lock($1) AS ok", [lockKey])).rows[0].ok;
+    const locked = (await client.query("SELECT pg_try_advisory_lock(hashtext($1)) AS ok", [lockKey])).rows[0].ok;
     if (!locked) throw conflict("a LeagueApps sync is already running");
     const start = fromScratch ? { lastUpdated: 0, lastId: 0 } : await loadCursor();
     const { map } = await fieldMap();
@@ -270,7 +299,7 @@ async function sync({ fromScratch = false } = {}) {
     if (summary.created || summary.updated) emitDomain("registrations.synced", { created: summary.created, updated: summary.updated });
     return summary;
   } finally {
-    await client.query("SELECT pg_advisory_unlock($1)", [lockKey]).catch(() => {});
+    await client.query("SELECT pg_advisory_unlock(hashtext($1))", [lockKey]).catch(() => {});
     client.release();
   }
 }
@@ -285,12 +314,12 @@ const MEMBERS_SOURCE = "leagueapps-members-2";
  * email, deleted, lastUpdated). Existing members keep their Order.
  */
 async function syncMembers({ fromScratch = false } = {}) {
-  if (!isConfigured()) throw new HttpError(503, "LeagueApps isn't configured (set LEAGUEAPPS_SITE_ID, LEAGUEAPPS_CLIENT_ID, LEAGUEAPPS_PRIVATE_KEY)");
+  if (!(await isConfigured())) throw new HttpError(503, NOT_CONNECTED);
   const factions = require("./factions");
   const client = await db.connect();
-  const lockKey = 4815162343;
+  const lockKey = `leagueapps-members:${currentOrg()}`;
   try {
-    const locked = (await client.query("SELECT pg_try_advisory_lock($1) AS ok", [lockKey])).rows[0].ok;
+    const locked = (await client.query("SELECT pg_try_advisory_lock(hashtext($1)) AS ok", [lockKey])).rows[0].ok;
     if (!locked) throw conflict("a LeagueApps member import is already running");
     const saved = await db.one("SELECT * FROM sync_state WHERE source = $1", [MEMBERS_SOURCE]);
     const start = fromScratch || !saved ? { lastUpdated: 0, lastId: 0 } : { lastUpdated: Number(saved.last_updated), lastId: Number(saved.last_id) };
@@ -335,14 +364,14 @@ async function syncMembers({ fromScratch = false } = {}) {
     if (summary.new_members) emitDomain("factions.updated", { imported: summary.new_members });
     return summary;
   } finally {
-    await client.query("SELECT pg_advisory_unlock($1)", [lockKey]).catch(() => {});
+    await client.query("SELECT pg_advisory_unlock(hashtext($1))", [lockKey]).catch(() => {});
     client.release();
   }
 }
 
 /** First few raw records with how each field was read, to confirm the mapping. */
 async function preview() {
-  if (!isConfigured()) throw new HttpError(503, "LeagueApps isn't configured");
+  if (!(await isConfigured())) throw new HttpError(503, NOT_CONNECTED);
   const rows = (await exportPage("registrations-2", { lastUpdated: 0, lastId: 0 })).slice(0, 5);
   const { map, override } = await fieldMap();
   return {
@@ -361,15 +390,19 @@ async function setFieldMap(input) {
     if (typeof v !== "string" || !/^[A-Za-z_][\w.]{0,60}$/.test(v)) throw new HttpError(400, `field name for ${k} isn't valid`);
     clean[k] = v;
   }
-  await db.query(
-    "INSERT INTO integration_settings (key, value) VALUES ('leagueapps_field_map', $1) ON CONFLICT (key) DO UPDATE SET value = $1",
-    [JSON.stringify(clean)],
-  );
+  if (await connectionRow()) {
+    await db.query("UPDATE leagueapps_connections SET field_map = $1, updated_at = now() WHERE org_id = blst_org()", [JSON.stringify(clean)]);
+  } else {
+    await db.query(
+      "INSERT INTO integration_settings (key, value) VALUES ('leagueapps_field_map', $1) ON CONFLICT (key) DO UPDATE SET value = $1",
+      [JSON.stringify(clean)],
+    );
+  }
   return clean;
 }
 
 async function status() {
-  const s = settings();
+  const s = await settings();
   const [state, programs] = await Promise.all([
     db.one("SELECT * FROM sync_state WHERE source = $1", [SOURCE]),
     db.many(
@@ -378,8 +411,11 @@ async function status() {
     ),
   ]);
   return {
-    configured: isConfigured(),
+    configured: Boolean(s.source),
+    source: s.source,
     site_id: s.siteId || null,
+    client_id: s.clientId || null,
+    last_error: s.row ? s.row.last_error : null,
     api_base: s.apiBase,
     last_run_at: state?.last_run_at || null,
     last_result: state?.last_result || null,
@@ -390,22 +426,98 @@ async function status() {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Connecting an organization
+
+/** A .p12 / .pfx key file (base64) to PEM, with the system openssl. */
+function p12ToPem(base64, password = "") {
+  const fs = require("fs");
+  const os = require("os");
+  const path = require("path");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "la-key-"));
+  const file = path.join(dir, "key.p12");
+  fs.writeFileSync(file, Buffer.from(base64, "base64"), { mode: 0o600 });
+  const run = (extra) => new Promise((resolve, reject) => {
+    execFile("openssl", ["pkcs12", "-in", file, "-nocerts", "-nodes", "-passin", "env:LA_P12_PASS", ...extra],
+      { env: { PATH: process.env.PATH, LA_P12_PASS: password }, timeout: 10000 }, (err, stdout) => (err ? reject(err) : resolve(stdout)));
+  });
+  // OpenSSL 3 needs -legacy for the older ciphers LeagueApps' files use; 1.x doesn't know the flag.
+  return run(["-legacy"]).catch(() => run([])).then((out) => {
+    const m = /-----BEGIN (?:RSA |ENCRYPTED )?PRIVATE KEY-----[\s\S]+?-----END (?:RSA |ENCRYPTED )?PRIVATE KEY-----/.exec(out);
+    if (!m) throw new Error("no private key in the file");
+    return m[0];
+  }, (err) => {
+    if (err.code === "ENOENT") throw new HttpError(400, "This server can't read .p12 files (openssl isn't installed). Paste the key as PEM instead (see the help text).");
+    throw new HttpError(400, "Couldn't read the .p12 file: check its password (LeagueApps' files usually have none).");
+  }).finally(() => fs.rmSync(dir, { recursive: true, force: true }));
+}
+
+/**
+ * Connects this organization's LeagueApps account: site ID, client ID and
+ * the private key (PEM text, or the .p12 file LeagueApps gives you as
+ * base64). The key is checked by signing in before anything is saved.
+ */
+async function connect({ site_id: siteId, client_id: clientId, private_key: pem, p12_base64: p12, p12_password: pass }) {
+  const existing = await connectionRow();
+  siteId = String(siteId || (existing && existing.site_id) || "").trim();
+  clientId = String(clientId || (existing && existing.client_id) || "").trim();
+  if (!/^\d{1,12}$/.test(siteId)) throw new HttpError(400, "site_id is the number in your LeagueApps admin address (…/sites/12345/…)");
+  if (!clientId || clientId.length > 200) throw new HttpError(400, "client_id is required (LeagueApps → Connect → API Settings)");
+  let key = pem ? String(pem).replace(/\\n/g, "\n").trim() : null;
+  if (!key && p12) key = await p12ToPem(String(p12), pass ? String(pass) : "");
+  if (!key && existing) key = box.open("leagueapps-key", existing.private_key_enc);
+  if (!key) throw new HttpError(400, "the private key is required (upload the .p12 file from LeagueApps)");
+  try {
+    crypto.createPrivateKey(key);
+  } catch {
+    throw new HttpError(400, "That isn't a valid private key. Upload the .p12 file from LeagueApps, or paste the PEM text including the BEGIN/END lines.");
+  }
+  const s = { ...endpoints(), siteId, clientId, privateKey: key, source: "organization" };
+  tokenCache.delete(`${currentOrg()}:${clientId}`);
+  await accessToken(true, s); // throws (502) when LeagueApps refuses the key
+  await db.query(
+    `INSERT INTO leagueapps_connections (site_id, client_id, private_key_enc) VALUES ($1, $2, $3)
+     ON CONFLICT (org_id) DO UPDATE SET site_id = $1, client_id = $2, private_key_enc = $3, last_error = NULL, updated_at = now()`,
+    [siteId, clientId, box.seal("leagueapps-key", key)]);
+  return status();
+}
+
+async function disconnect() {
+  await db.query("DELETE FROM leagueapps_connections WHERE org_id = blst_org()");
+  for (const k of [...tokenCache.keys()]) if (k.startsWith(`${currentOrg()}:`)) tokenCache.delete(k);
+}
+
 let timer = null;
+/** Every connected organization syncs every LEAGUEAPPS_SYNC_INTERVAL_MIN minutes. */
 function startSchedule(log = console) {
   const minutes = Number(process.env.LEAGUEAPPS_SYNC_INTERVAL_MIN || 0);
-  if (!minutes || !require("../lib/context").withOrg(LA_ORG_ID, isConfigured) || timer) return;
+  if (!minutes || timer) return;
   const { withOrg } = require("../lib/context");
-  timer = setInterval(() => withOrg(LA_ORG_ID, () => {
-    sync().then((s) => s.created + s.updated && log.log(`LeagueApps sync: ${s.created} new, ${s.updated} updated`))
-      .catch((err) => err.status !== 409 && log.error("LeagueApps sync failed:", err.message))
-      .then(() => syncMembers())
-      .then((s) => s && s.new_members && log.log(`LeagueApps members: ${s.new_members} new Factions members`))
-      .catch((err) => err.status !== 409 && log.error("LeagueApps member import failed:", err.message));
-  }), Math.max(5, minutes) * 60000);
+  const runOrg = (orgId) => withOrg(orgId, async () => {
+    if (!(await isConfigured())) return;
+    try {
+      const s = await sync();
+      if (s.created + s.updated) log.log(`LeagueApps sync (org ${orgId}): ${s.created} new, ${s.updated} updated`);
+    } catch (err) {
+      if (err.status !== 409) log.error(`LeagueApps sync failed (org ${orgId}):`, err.message);
+    }
+    try {
+      const m = await syncMembers();
+      if (m && m.new_members) log.log(`LeagueApps members (org ${orgId}): ${m.new_members} new Factions members`);
+    } catch (err) {
+      if (![404, 409].includes(err.status)) log.error(`LeagueApps member import failed (org ${orgId}):`, err.message);
+    }
+  });
+  timer = setInterval(async () => {
+    const orgs = await withOrg("*", () => db.many(
+      "SELECT o.id FROM organizations o WHERE o.status = 'active' AND (o.id = $1 OR EXISTS (SELECT 1 FROM leagueapps_connections c WHERE c.org_id = o.id))", [LA_ORG_ID]))
+      .catch(() => []);
+    for (const o of orgs) await runOrg(o.id);
+  }, Math.max(5, minutes) * 60000);
   timer.unref();
 }
 
 module.exports = {
   SOURCE, MEMBERS_SOURCE, FIELD_CANDIDATES, settings, isConfigured, buildAssertion, accessToken, exportPage, iterate, mapRecord, sync, syncMembers, preview,
-  setFieldMap, status, startSchedule, timing, _reset: () => (tokenCache = null),
+  setFieldMap, status, connect, disconnect, p12ToPem, startSchedule, timing, _reset: () => tokenCache.clear(),
 };

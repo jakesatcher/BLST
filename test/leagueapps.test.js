@@ -250,3 +250,44 @@ test("CSV fallback (LeagueApps registrations report) and field-map preview", asy
   assert.equal(s.body.created, 1, JSON.stringify(s.body));
   assert.ok((await api("GET", `/tournaments/${S.winter}/registrations`)).body.some((x) => x.first_name === "Gina"));
 });
+
+test("an organization connects its own LeagueApps with the .p12 file; the key is stored encrypted", async () => {
+  const fs = require("fs");
+  const os = require("os");
+  const path = require("path");
+  const { execFileSync } = require("child_process");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "la-test-"));
+  fs.writeFileSync(path.join(dir, "key.pem"), privateKey.export({ type: "pkcs8", format: "pem" }));
+  execFileSync("openssl", ["pkcs12", "-export", "-nocerts", "-inkey", path.join(dir, "key.pem"), "-out", path.join(dir, "key.p12"), "-passout", "pass:"]);
+  const p12 = fs.readFileSync(path.join(dir, "key.p12")).toString("base64");
+  const other = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({ type: "pkcs8", format: "pem" });
+  fs.rmSync(dir, { recursive: true, force: true });
+
+  assert.equal((await api("GET", "/integrations/leagueapps")).body.source, "server", "server settings until the organization connects");
+  // Validation and a key LeagueApps refuses: nothing saved.
+  assert.equal((await api("PUT", "/integrations/leagueapps", { site_id: "abc", client_id: CLIENT_ID, p12_base64: p12 })).status, 400);
+  assert.equal((await api("PUT", "/integrations/leagueapps", { site_id: SITE, client_id: CLIENT_ID, private_key: "not a key" })).status, 400);
+  const refused = await api("PUT", "/integrations/leagueapps", { site_id: SITE, client_id: CLIENT_ID, private_key: other });
+  assert.equal(refused.status, 502, JSON.stringify(refused.body));
+  assert.equal((await api("GET", "/integrations/leagueapps")).body.source, "server");
+
+  const ok = await api("PUT", "/integrations/leagueapps", { site_id: SITE, client_id: CLIENT_ID, p12_base64: p12 });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  assert.equal(ok.body.source, "organization");
+  assert.equal(ok.body.site_id, SITE);
+  const db = require("../src/db");
+  const row = await db.one("SELECT * FROM leagueapps_connections");
+  assert.ok(!row.private_key_enc.includes("PRIVATE KEY"), "key encrypted at rest");
+  assert.ok(!JSON.stringify(ok.body).includes("PRIVATE"), "key never returned");
+  // Syncs use the organization's own connection.
+  delete process.env.LEAGUEAPPS_PRIVATE_KEY;
+  const s = await api("POST", "/integrations/leagueapps/sync", {});
+  assert.equal(s.status, 200, JSON.stringify(s.body));
+
+  // An API key can't change credentials; disconnecting removes them.
+  const key = (await api("POST", "/admin/api-keys", { name: "la desk", role: "admin" })).body.key;
+  assert.equal((await api("PUT", "/integrations/leagueapps", { site_id: SITE, client_id: "x", private_key: "y" }, key)).status, 403);
+  assert.equal((await api("DELETE", "/integrations/leagueapps")).status, 204);
+  assert.equal((await api("GET", "/integrations/leagueapps")).body.configured, false);
+  assert.equal((await api("POST", "/integrations/leagueapps/sync", {})).status, 503);
+});

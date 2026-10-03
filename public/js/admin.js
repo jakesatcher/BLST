@@ -108,6 +108,8 @@
   if (!tabNames.some(([id]) => id === firstTab)) firstTab = "tournaments";
   const mainTabs = tabs(tabNames, (t) => { history.replaceState(null, "", `#${t}`); show(t); }, firstTab, { size: "big" });
   mount(app,
+    BLST.org && BLST.org.setup_needed ? h("div", { class: "notice", style: { marginBottom: "12px" } },
+      h("strong", null, "Finish setting up your league: "), "divisions, this season, past seasons' stats and your scorekeepers. ", h("a", { href: "/setup" }, "Continue setup →")) : "",
     h("div", { class: "row between" }, h("h1", null, "Admin"),
       me.via === "dev-open" ? h("span", { class: "badge" }, "dev mode: no ADMIN_TOKEN set") : ""),
     mainTabs.el, view);
@@ -1139,98 +1141,23 @@
   }
 
   async function importHistoryView(view) {
-    await BLST.ready;
-    const types = (BLST.org && BLST.org.tournament_types) || [];
-    const city = input("hi-city", { required: true, placeholder: "Pittsburgh", maxlength: 60, autocomplete: "off" });
-    const series = types.length
-      ? select("hi-series", [["", "Choose…"], ...types.map((x) => [x, x])], "")
-      : input("hi-series", { required: true, placeholder: "e.g. DEX", maxlength: 30 });
-    const year = input("hi-year", { type: "number", min: 1950, max: 2100, value: new Date().getFullYear(), required: true });
-    const fmt = select("hi-format", [["draft", "Draft (stats follow players)"], ["team", "Team (teams carry over)"]], "draft");
-    // Or straight into a league division-season.
-    const comps = (await get("/tournaments")).filter((t) => t.kind === "league");
-    const intoSel = select("hi-into", [["", "A tournament (city, type and year below)"], ...comps.map((t) => [t.id, `League: ${t.name}`])], "", {
-      onchange: () => { tournamentFields.classList.toggle("hidden", Boolean(intoSel.value)); checkId(); } });
-    const leagueTarget = () => (intoSel.value ? Number(intoSel.value) : null);
-    let tournamentFields;
-    const idBox = h("div", { class: "notice small", "aria-live": "polite" }, "Fill in city, type and year to get the Tournament ID.");
-    let idState = null;
-    const checkId = debounce(async () => {
-      idState = null;
-      if (leagueTarget()) return mount(idBox, "Stats go into ", h("strong", null, comps.find((t) => t.id === leagueTarget()).name), ". A division-season's stats can be uploaded once; uploading again offers to replace them.");
-      if (!city.value.trim() || !series.value || !/^\d{4}$/.test(year.value)) return mount(idBox, "Fill in city, type and year to get the Tournament ID.");
-      try {
-        const r = await get(`/import/tournament-id?city=${encodeURIComponent(city.value.trim())}&series=${encodeURIComponent(series.value)}&year=${year.value}`);
-        idState = r;
-        const t = r.tournament;
-        mount(idBox, h("strong", { class: "mono" }, r.code), " · ",
-          !t ? "a new tournament is created with this upload"
-            : t.scored_games ? h("span", { class: "bad-text" }, `${t.name} was scored live in BLST; its stats are already here`)
-              : t.uploaded_rows ? h("span", { class: "bad-text" }, `${t.name} already has ${t.uploaded_rows} uploaded rows. Uploading again replaces them.`)
-                : `stats go into ${t.name}`);
-      } catch (e) {
-        mount(idBox, h("span", { class: "bad-text" }, e.message));
-      }
-    }, 300);
-    for (const el of [city, series, year]) el.addEventListener("input", checkId);
-    series.addEventListener("change", checkId);
-    const area = h("textarea", { placeholder: "name,season,event,team,gp,g,a,pim,+/-\nSam Sniper,2025,Fall Classic,Wolves,10,8,6,4,5" });
-    const report = h("div");
+    const importer = h("div");
     const batches = h("div");
-    const source = h("input", { placeholder: "e.g. 2025 league site", value: "" });
     const loadBatches = async () => {
       const list = await get("/import/batches");
-      mount(batches, table([
-        { key: "imported_at", label: "Imported", fmt: (b) => fmtDate(b.imported_at) }, { key: "tournament", label: "Tournament ID", fmt: (b) => b.tournament || "—" }, { key: "source", label: "Source" },
-        { key: "rows", label: "Rows", num: true }, { key: "import_batch", label: "Batch" },
+      mount(batches, list.length ? table([
+        { key: "imported_at", label: "Imported", fmt: (b) => fmtDate(b.imported_at) }, { key: "tournament", label: "Into", fmt: (b) => b.tournament || "—" }, { key: "source", label: "Source" },
+        { key: "rows", label: "Rows", num: true },
         { key: "x", label: "", sort: false, fmt: (b) => h("button", { class: "sm danger", onclick: async () => {
           if (!(await confirmSheet(`Delete all ${b.rows} stat lines from this import?`, { title: "Undo import", confirmLabel: "Delete rows", danger: true }))) return;
-          await run(() => api("DELETE", `/import/batches/${encodeURIComponent(b.import_batch)}`), "Batch deleted");
+          await run(() => api("DELETE", `/import/batches/${encodeURIComponent(b.import_batch)}`), "Import undone");
           loadBatches();
         } }, "Undo import") },
-      ], list, { sortKey: "imported_at" }));
+      ], list, { sortKey: "imported_at" }) : h("p", { class: "muted" }, "Nothing imported yet."));
     };
-    const go = async (dry, replace = false) => {
-      if (!leagueTarget() && (!city.value.trim() || !series.value || !/^\d{4}$/.test(year.value))) return toast("Fill in the city, tournament type and year first", true);
-      if (!dry && !replace && idState && idState.tournament && idState.tournament.uploaded_rows) {
-        if (!(await confirmSheet(`${idState.code} already has ${idState.tournament.uploaded_rows} uploaded rows. Replace them with this file? (The earlier upload's rows are removed, so nothing is counted twice.)`,
-          { title: "Replace earlier upload", confirmLabel: "Replace" }))) return;
-        replace = true;
-      }
-      const body = importPayload(area.value, { dry_run: dry, source: source.value || undefined, skip_errors: $("#hi-skip").checked, create_missing_players: $("#hi-create").checked,
-        format: fmt.value, replace: replace || undefined,
-        ...(leagueTarget() ? { tournament_id: leagueTarget() } : { city: city.value.trim(), series: series.value, year: Number(year.value) }) });
-      try {
-        mount(report, importReport(await api("POST", "/import/historical", body)));
-        if (!dry) { loadBatches(); checkId(); }
-      } catch (err) {
-        if (err.data && err.data.errors) mount(report, importReport(err.data));
-        else if (err.status === 409 && err.data && err.data.details && err.data.details.duplicate) {
-          mount(report, h("div", { class: "notice error", style: { marginTop: "10px" } }, err.message,
-            h("div", { class: "row", style: { marginTop: "8px" } }, h("button", { class: "primary", onclick: () => go(false, true) }, "Replace the earlier upload"))));
-        } else toast(err.message, true);
-      }
-    };
-    mount(view,
-      h("div", { class: "card" }, h("h2", null, "Import historical stats"),
-        h("p", { class: "muted small" },
-          "One row per player per season/event. Recognised columns (case-insensitive, common abbreviations OK): name or first_name/last_name, email, external_id, season, event, team, position, GP, G, A, PIM, +/-, PPG, PPA, SHG, SHA, GWG, SOG, HITS, BLK, FOW, FOL; goalies: GP (or GPI), W, L, OTL, T, SA, GA, SV, SO, MIN (minutes or mm:ss)."),
-        h("h3", null, "1. Which tournament?"),
-        comps.length ? h("div", { class: "form" }, field("Upload into", intoSel, "wide")) : "",
-        (tournamentFields = h("div", { class: "form" }, field("City", city), field("Tournament type", series), field("Year", year), field("Team format (if it's new)", fmt))),
-        idBox,
-        h("h3", null, "2. The stats file"),
-        h("div", { class: "row", style: { marginBottom: "8px" } }, fileLoader(area), field("Source label", source)),
-        area,
-        h("div", { class: "row" },
-          h("label", { class: "inline" }, h("input", { type: "checkbox", id: "hi-create", checked: true }), "Create players that don't exist"),
-          h("label", { class: "inline" }, h("input", { type: "checkbox", id: "hi-skip" }), "Skip bad rows"),
-          ),
-
-        h("p", { class: "muted small" }, "One file per tournament. Each row is kept with the tournament (its own stats page) and also adds to the player's all-time totals and, for team tournaments, the team's history. Players are matched by registration or player code, email, then name. No emails in the file? That's fine: match them to registered players later under Match players."),
-        h("div", { class: "row", style: { marginTop: "10px" } }, h("button", { onclick: () => go(true) }, "Dry run"), h("button", { class: "primary", onclick: () => go(false) }, "Import")),
-        report),
-      h("div", { class: "card" }, h("h2", null, "Previous imports"), batches));
+    mount(view, importer, h("div", { class: "card" }, h("h2", null, "Previous imports"),
+      h("p", { class: "muted small" }, "Each upload can be undone. To change an upload, import the corrected file and choose Replace."), batches));
+    await BLST.historyImporter(importer, { onDone: () => loadBatches() });
     loadBatches();
   }
 
@@ -1590,7 +1517,9 @@
           }
         } }, "Disconnect")) : "");
 
-    if (!st.connected) return mount(view, head);
+    const la = h("div");
+    BLST.leagueAppsCard(la).catch((e) => mount(la, h("p", { class: "notice error" }, e.message)));
+    if (!st.connected) return mount(view, la, head);
 
     const list = await get("/tournaments");
     const tBox = h("div");
@@ -1651,7 +1580,7 @@
           ], links.games) : h("p", { class: "muted" }, "No SportsEngine games in this competition yet.")));
     }
 
-    mount(view, head, work,
+    mount(view, la, head, work,
       h("div", { class: "card" }, h("h2", null, "Sync a tournament or league division"), field("Into", pick)), tBox,
       h("div", { class: "card" }, h("h2", null, "Activity"), st.log.length ? table([
         { key: "at", label: "At", fmt: (l) => fmtDate(l.at) }, { key: "action", label: "What" },

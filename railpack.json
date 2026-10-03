@@ -1,6 +1,7 @@
 {
   "$schema": "https://schema.railpack.com",
   "deploy": {
+    "aptPackages": ["openssl"],
     "startCommand": "npm run seed -- --if-enabled --once; npm start"
   }
 }

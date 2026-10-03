@@ -35,7 +35,8 @@ function orgView(o, req) {
 /** Where am I? The organization for this address (null on the platform). */
 router.get("/org", (req, res) => {
   res.json({
-    org: req.org ? { slug: req.org.slug, name: req.org.name, factions_enabled: req.org.factions_enabled, tournament_types: req.org.tournament_types || [], url: orgUrl(req.org.slug, req) } : null,
+    org: req.org ? { slug: req.org.slug, name: req.org.name, factions_enabled: req.org.factions_enabled, tournament_types: req.org.tournament_types || [], url: orgUrl(req.org.slug, req),
+      setup_needed: !(req.org.onboarding && req.org.onboarding.completed) } : null,
     platform: { app_domain: config.appDomain || null, url: platformUrl(req) },
   });
 });
@@ -131,7 +132,7 @@ router.patch("/platform/orgs/:id", requireInteractiveAdmin, requirePlatformAdmin
   if (status && org.requested_by) {
     const who = await db.one("SELECT email FROM accounts WHERE id = $1", [org.requested_by]);
     const text = status === "active"
-      ? `"${org.name}" is approved and live at ${orgUrl(org.slug, req)}\n\nSign in there with this email to set it up.`
+      ? `"${org.name}" is approved and live at ${orgUrl(org.slug, req)}\n\nSet up your league (divisions, this season, past seasons' stats, SportsEngine or LeagueApps, scorekeepers) at ${orgUrl(org.slug, req)}/setup — sign in there with this email.`
       : status === "rejected" ? `"${org.name}" wasn't approved. Reply to this email if you have questions.` : `"${org.name}" has been suspended.`;
     if (who) notify.sendEmail(who.email, `Your organization on Beer League Stats: ${org.name}`, text).catch(() => {});
   }

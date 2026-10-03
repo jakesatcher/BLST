@@ -1,6 +1,6 @@
 const { Router } = require("express");
 const db = require("../db");
-const { requireRole, assertTournamentScope } = require("../middleware/auth");
+const { requireRole, requireInteractiveAdmin, assertTournamentScope } = require("../middleware/auth");
 const { badRequest, notFound, intParam, optEnum, optString, optBool } = require("../lib/http");
 const { csvToObjects, normalizeHeader } = require("../lib/csv");
 const reg = require("../services/registrations");
@@ -167,6 +167,20 @@ router.get("/players/:id/registrations", admin, async (req, res) => {
 
 router.get("/integrations/leagueapps", admin, async (_req, res) => {
   res.json(await leagueapps.status());
+});
+
+/** Connects this organization's LeagueApps account (signed-in admins only: it's a credential). */
+router.put("/integrations/leagueapps", requireInteractiveAdmin, async (req, res) => {
+  const str = (k, max) => (req.body[k] == null || req.body[k] === "" ? undefined : String(req.body[k]).slice(0, max));
+  res.json(await leagueapps.connect({
+    site_id: str("site_id", 20), client_id: str("client_id", 200), private_key: str("private_key", 20000),
+    p12_base64: str("p12_base64", 40000), p12_password: str("p12_password", 200),
+  }));
+});
+
+router.delete("/integrations/leagueapps", requireInteractiveAdmin, async (_req, res) => {
+  await leagueapps.disconnect();
+  res.status(204).end();
 });
 
 router.post("/integrations/leagueapps/sync", admin, async (req, res) => {

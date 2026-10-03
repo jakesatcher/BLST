@@ -147,17 +147,37 @@ The `Procfile` runs migrations in the release phase. TLS to Heroku Postgres is t
 
 - **Players:** a player is one record for life, so their stats follow them from team to team. In **draft tournaments** (teams reshuffled each time) that's the history that matters: `/history` shows everyone's all-time totals, and each player's page lists every tournament with the team they were on.
 - **Teams:** set a tournament's **Format** to *Teams (same teams carry over)*. Each team then joins the team with the same name from earlier team tournaments (created automatically; placeholder names like "Team 3" don't count until renamed). Its page shows the record each time and every player's stats while on that team. Two spellings of one team? Admin → History → Teams over time → **Merge**.
-- **Imported history:** Admin → History → **Import stats**, one file per tournament (CSV: name, team, GP, G, A, …). Every upload names its tournament with three fields, **city**, **tournament type** (your organization's series, e.g. DEX, Bash, Outlaw; set them under Admin → Organization) and **year**, which make its **Tournament ID** (e.g. `PITTSBURGH-DEX-2025`). A tournament's stats can be uploaded **once**: uploading the same ID again is refused rather than counted twice, and the form offers to **replace** the earlier upload instead (e.g. a corrected file). The ID finds the tournament (including one set up in BLST with the same city, type and year) or creates it, marked *imported*, with its teams. That tournament gets its own stats page (leaders, skaters, goalies, rosters), and the same lines count once toward each player's all-time totals and, for team-type tournaments, the team's history. **Undo import** removes the lines and any tournament the import created. Per-player files have no game results, so imported tournaments show no scores or standings.
+- **Imported history:** Admin → History → **Import stats** (or step 4 of league setup). The stats can come from:
+  - **a file:** Excel (`.xlsx`), CSV, tab-separated or JSON, such as a stats site's export;
+  - **pasted** rows copied from a spreadsheet or web page;
+  - **a link:** a Google Sheet shared as *anyone with the link*, a Dropbox or OneDrive file, or any https CSV, Excel or JSON link;
+  - **SportsEngine:** a past season's teams, rosters, games and final scores (see SportsEngine);
+  - **LeagueApps:** a past program's players with their emails, so stats files match the right people.
+
+  Column names don't have to match: BLST finds the header row (title rows above it are fine), skips "Totals" lines and guesses what each column is (G, Goals, `stats.goals`, `goalsScored` …). The admin confirms or changes each one before importing. **Check first** shows what would happen without saving anything.
+- **Where it goes:** a **league**, where one file can hold every season and division (season and division columns). Each season-division becomes that season's division in the league, added if missing; "C League" and "Div C" are both division C. Or a **tournament**, named by its **Tournament ID** (**city** + **tournament type** + **year**, e.g. `PITTSBURGH-DEX-2025`; types are set under Admin → Organization).
+- **Never counted twice:** a tournament's or season-division's stats can be uploaded once. Uploading again is refused, with an offer to **replace** the earlier upload (e.g. a corrected file). Imported lines get their own stats page and count once toward each player's all-time totals and, for team competitions, the team's history. **Undo import** removes them. Player files have no game results, so standings for imported seasons come from SportsEngine scores (or stay empty).
 - **New tournaments:** pick the **tournament type** (Draft or Team) and type each team's name on its own line (blank lines become Team 1, Team 2, …).
 - **Officials of record:** every game can list its referees, linespersons, scorekeepers and timekeepers, as many of each as needed: Admin → Schedule → **Officials**, or **Add officials** on the scorekeeper screen. They show on the public game page.
 - **No emails in old files?** Imported players are matched when someone registers: an exact name links them (flagged for review); a nickname or initial ("Mike" / "Michael", "J. Quinn") is flagged. Admin → History → **Match players** lists every likely pair (imported player without email ⇄ player with email): **Same person: merge** moves all their stats onto one player; **Different people** hides the pair for good. Or attach emails in bulk (player code or name + email); registrations with those emails then link automatically.
+
+## League setup (new organizations)
+
+When an organization is approved, its admin gets an email linking to **`/setup`**, and Admin shows **Continue setup** until it's finished. The steps:
+1. **League:** name and divisions, strongest first (B, C, D…), plus any one-off tournament types.
+2. **This season:** the season's name and dates, and each division's teams (one per line).
+3. **Connect:** SportsEngine and/or LeagueApps (optional).
+4. **Past seasons:** import history from a file, a link, SportsEngine or LeagueApps (see Imported history).
+5. **People:** invite scorekeepers and other admins by email.
+
+A step is marked done when its result exists, so setup can be left and resumed. Any step can be skipped and done later here or in Admin.
 
 ## Leagues, divisions and player ratings
 
 - **Structure:** a league runs **seasons**; each season has **divisions** (B, C, D…), each with its own teams, schedule, standings and playoffs. Set it up under Admin → **Leagues**: create the league (divisions strongest first), add a season, then **Start division** with its teams (one name per line). Teams with the same name carry over between seasons.
 - **Scoring:** a division in a season is a competition like any tournament: **Teams, schedule & scoring** opens it under Tournaments, and the scorekeeper screen scores its games live.
 - **Stats:** the league page (`/league?id=N`, linked from Stats) shows standings by division and skater and goalie stats for any season and division, or all-time. A player's stats follow them across teams and divisions in the league, and a player can play in more than one division in a season.
-- **History:** upload past seasons into a division-season (Admin → History → Import stats → *Upload into*: the league division). Each division-season can be uploaded once.
+- **History:** import past seasons (any file, link, SportsEngine or LeagueApps; see Imported history above). One file can hold every season and division.
 - **Ratings (0–100):** production per game (goals × 1.0 + assists × 0.7, plus extras for short-handed, game-winning and power-play goals) × the division's strength (B 1.00, C 0.85, D 0.70 by default, editable per division), weighted toward recent seasons (each older season counts 0.6×), blended with 10 games of league-average production so small samples don't top the list, then shown as a percentile within the league. Goalies are rated on save % and goals against per game. Players need 3 games. Every rating has a **How** breakdown, and the weights are editable per league.
 
 ## Accounts and sign-in
@@ -214,13 +234,12 @@ A matched registration links to the player's existing record, so their imported 
 - **Look up a code:** registration or player code → the person, their tournaments, teams and imported history. Scorekeepers get the same lookup as **Check-in** on the scorekeeper screen, without email or birth date.
 - **Download draft sheet:** the draft template pre-filled with every registered, undrafted player and their code. A `registration_code` column on the roster upload is the most reliable way to identify a player, and players left without a team are listed instead of failing the upload.
 
-**LeagueApps setup.** Get a **Private API key** in LeagueApps: Admin Dashboard → Connect → API Settings. Convert the `.p12` file it gives you:
-```bash
-openssl pkcs12 -nodes -legacy -in <client-id>.p12 -out <client-id>.pem
-```
-Then set `LEAGUEAPPS_SITE_ID`, `LEAGUEAPPS_CLIENT_ID` and `LEAGUEAPPS_PRIVATE_KEY` (the PEM contents). These settings belong to one organization: `LEAGUEAPPS_ORG_ID` (default `1`, the first organization) says which. To sync on a schedule, either:
-- set `LEAGUEAPPS_SYNC_INTERVAL_MIN`, or
-- add Heroku Scheduler running `npm run sync:leagueapps`.
+**LeagueApps setup.** Each organization connects its own account under **Admin → Integrations → LeagueApps** (or in league setup):
+1. In LeagueApps, get a **Private API key**: Admin Dashboard → Connect → API Settings. You get a client ID and a `.p12` key file.
+2. Enter the **site ID** (the number in your LeagueApps admin address), the **client ID**, and upload the `.p12` file. The server converts it with `openssl` (installed on Railway by `railpack.json`); the PEM text can be pasted instead.
+3. BLST signs in to check the key before saving it. The key is stored encrypted, and only an admin signed in with their account (not an API key) can change it.
+
+The older server settings still work for one organization when it hasn't connected its own: `LEAGUEAPPS_SITE_ID`, `LEAGUEAPPS_CLIENT_ID`, `LEAGUEAPPS_PRIVATE_KEY`, and `LEAGUEAPPS_ORG_ID` (default `1`). With `LEAGUEAPPS_SYNC_INTERVAL_MIN` set, every connected organization syncs on that schedule. Otherwise, use **Sync now** or Heroku Scheduler (`npm run sync:leagueapps`).
 
 The sync is incremental and safe to repeat.
 
@@ -235,6 +254,7 @@ The sync is incremental and safe to repeat.
 3. Pick a tournament or league division under **Sync**, then:
    - **Import teams and rosters**: each ticked SportsEngine team becomes the BLST team with the same name (added if missing). Its roster comes in with jersey numbers. Players are matched by email, then name and birth date, then name (doubtful matches are listed to check); anyone new is added. Run it again to pick up roster changes; nothing is duplicated.
    - **Import schedule**: SportsEngine games between the linked teams become BLST games, with time, rink, and home and away. Re-running updates games not yet started.
+   - **Past results:** games already played in SportsEngine come in with their final score. They count in standings and team records. They have no play-by-play, so they can't be reopened, but their score can be corrected. Past seasons can also be pulled from Import stats → **SportsEngine**.
    - **Games and results**: when a SportsEngine game goes final in BLST, its score is sent back to the SportsEngine event automatically (switch this off on the connection). **Send** re-sends a score after a correction.
 
 The stats themselves (goals, assists, saves …) come from BLST's live scoring, so imported games feed tournament, league, history and rating stats like any other game. Every sync is in the **Activity** log.

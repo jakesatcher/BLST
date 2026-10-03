@@ -240,6 +240,41 @@ test("a player's stats belong to one organization: games, imports, history, club
   assert.ok(!(await api("GET", "blpa", "/leagues")).body.some((x) => x.id === L.id));
 });
 
+test("a new organization's admin is guided through league setup", async () => {
+  const tok = S.owner.token;
+  assert.ok(outbox.some((m) => m.to === "owner@metro.example" && /metro\.bls\.test\/setup/.test(m.text)), "approval email links to setup");
+  assert.equal((await api("GET", "blpa", "/org")).body.org.setup_needed, false, "existing organizations are already set up");
+  assert.equal((await api("GET", "metro", "/org")).body.org.setup_needed, true);
+  assert.equal((await api("GET", "metro", "/admin/onboarding")).status, 401, "admins only");
+
+  let p = (await api("GET", "metro", "/admin/onboarding", { token: tok })).body;
+  // Earlier tests already gave Metro a league with divisions and imported history.
+  assert.equal(p.steps.find((x) => x.id === "league").done, true);
+  assert.equal(p.steps.find((x) => x.id === "history").done, true);
+  assert.equal(p.steps.find((x) => x.id === "connect").done, false);
+  assert.equal(p.next, "connect", "a live season already exists, so connecting is next");
+
+  // A second league becomes the one being set up; steps can be skipped.
+  const L2 = (await api("POST", "metro", "/leagues", { token: tok, body: { name: "Metro Summer", divisions: ["A", "B"] } })).body;
+  p = (await api("PUT", "metro", "/admin/onboarding", { token: tok, body: { league_id: L2.id, skip: "connect" } })).body;
+  assert.equal(p.league.name, "Metro Summer");
+  assert.deepEqual(p.league.divisions.map((d) => d.name), ["A", "B"]);
+  assert.equal(p.steps.find((x) => x.id === "connect").skipped, true);
+  assert.equal((await api("PUT", "metro", "/admin/onboarding", { token: tok, body: { skip: "nonsense" } })).status, 400);
+
+  // The new league has no season yet; one that isn't imported history counts.
+  assert.equal(p.steps.find((x) => x.id === "season").done, false);
+  const season = (await api("POST", "metro", `/leagues/${L2.id}/seasons`, { token: tok, body: { name: "2026" } })).body;
+  await api("POST", "metro", `/leagues/${L2.id}/seasons/${season.id}/divisions/${p.league.divisions[0].id}`, { token: tok, body: { team_names: ["Sharks", "Jets"] } });
+  p = (await api("GET", "metro", "/admin/onboarding", { token: tok })).body;
+  assert.equal(p.steps.find((x) => x.id === "season").done, true);
+
+  p = (await api("PUT", "metro", "/admin/onboarding", { token: tok, body: { completed: true } })).body;
+  assert.equal(p.completed, true);
+  assert.equal((await api("GET", "metro", "/org")).body.org.setup_needed, false);
+  assert.equal((await call("GET", host("metro"), "/setup")).status, 200, "the setup page is served on the organization's address");
+});
+
 test("the live stream only carries an organization's own events", async () => {
   const seen = [];
   const reqStream = http.request({ host: "127.0.0.1", port, path: "/api/v1/stream", headers: { host: host("metro"), "x-forwarded-for": nextIp() } }, (res) => {

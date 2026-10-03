@@ -345,7 +345,7 @@ async function importTeams(tournamentId, seTeamIds) {
  * games (or update their time and rink). Games already being scored in BLST
  * keep their BLST data.
  */
-async function importSchedule(tournamentId, { start, end }) {
+async function importSchedule(tournamentId, { start, end, include_results: includeResults = true }) {
   const c = await requireConnection();
   const t = await data.getTournament(tournamentId);
   const from = start ? new Date(start) : new Date(Date.now() - 30 * 864e5);
@@ -360,7 +360,8 @@ async function importSchedule(tournamentId, { start, end }) {
     events.push(...items(d.events));
     total = pages(d.events);
   }
-  const report = { tournament_id: t.id, seen: events.length, created: 0, updated: 0, skipped: 0 };
+  const report = { tournament_id: t.id, seen: events.length, created: 0, updated: 0, skipped: 0, results: 0 };
+  const scoreOf = (side) => (side.score === null || side.score === undefined || side.score === "" || !Number.isFinite(Number(side.score)) ? null : Number(side.score));
   for (const ev of events) {
     if (ev.type && !/game/i.test(ev.type)) continue;
     const sides = items(ev.eventTeams).filter((x) => teamLinks.has(String(x.teamId)));
@@ -371,26 +372,45 @@ async function importSchedule(tournamentId, { start, end }) {
     const awayId = teamLinks.get(String(away.teamId));
     const venue = ev.location && ev.location.name ? String(ev.location.name).slice(0, 120) : null;
     const when = ev.start ? new Date(ev.start) : null;
+    // A game already played in SportsEngine comes in with its final score
+    // (standings and team records; player stats come from a stats import).
+    const hs = scoreOf(home);
+    const as = scoreOf(away);
+    const played = includeResults && hs !== null && as !== null && (/final|complete|played|closed/i.test(ev.status || "") || (when && when.getTime() < Date.now()));
     const existing = await db.one(
       "SELECT g.* FROM sportsengine_links l JOIN games g ON g.id = l.blst_id WHERE l.kind = 'game' AND l.se_id = $1", [String(ev.id)]);
     if (existing) {
-      if (existing.status !== "scheduled") {
-        report.skipped += 1;
+      if (existing.status !== "scheduled" && !existing.result_only) {
+        report.skipped += 1; // scored live in BLST: BLST's record stands
         continue;
       }
-      await db.query("UPDATE games SET scheduled_at = $2, venue = COALESCE($3, venue), home_team_id = $4, away_team_id = $5, updated_at = now() WHERE id = $1",
-        [existing.id, when, venue, homeId, awayId]);
+      if (played) {
+        await db.query(
+          `UPDATE games SET scheduled_at = $2, venue = COALESCE($3, venue), home_team_id = $4, away_team_id = $5, status = 'final', result_only = TRUE,
+                  home_score = $6, away_score = $7, decision = COALESCE(decision, 'REG'), ended_at = COALESCE(ended_at, $2, now()), updated_at = now() WHERE id = $1`,
+          [existing.id, when, venue, homeId, awayId, hs, as]);
+        report.results += 1;
+      } else if (existing.status === "scheduled") {
+        await db.query("UPDATE games SET scheduled_at = $2, venue = COALESCE($3, venue), home_team_id = $4, away_team_id = $5, updated_at = now() WHERE id = $1",
+          [existing.id, when, venue, homeId, awayId]);
+      }
       report.updated += 1;
     } else {
-      const g = await db.one(
-        "INSERT INTO games (tournament_id, home_team_id, away_team_id, scheduled_at, venue) VALUES ($1, $2, $3, $4, $5) RETURNING id",
-        [t.id, homeId, awayId, when, venue]);
+      const g = played
+        ? await db.one(
+          `INSERT INTO games (tournament_id, home_team_id, away_team_id, scheduled_at, venue, status, result_only, home_score, away_score, decision, ended_at)
+           VALUES ($1, $2, $3, $4, $5, 'final', TRUE, $6, $7, 'REG', COALESCE($4, now())) RETURNING id`,
+          [t.id, homeId, awayId, when, venue, hs, as])
+        : await db.one(
+          "INSERT INTO games (tournament_id, home_team_id, away_team_id, scheduled_at, venue) VALUES ($1, $2, $3, $4, $5) RETURNING id",
+          [t.id, homeId, awayId, when, venue]);
+      if (played) report.results += 1;
       await db.query("INSERT INTO sportsengine_links (kind, se_id, blst_id, data) VALUES ('game', $1, $2, $3)",
         [String(ev.id), g.id, JSON.stringify({ home_team: String(home.teamId), away_team: String(away.teamId) })]);
       report.created += 1;
     }
   }
-  await log("schedule", true, `${report.created} new, ${report.updated} updated game${report.updated === 1 ? "" : "s"} for ${t.name}`, report);
+  await log("schedule", true, `${report.created} new, ${report.updated} updated game${report.updated === 1 ? "" : "s"}${report.results ? ` (${report.results} final scores)` : ""} for ${t.name}`, report);
   emitDomain("schedule.synced", { tournament_id: t.id, source: "sportsengine" });
   return report;
 }
@@ -405,6 +425,7 @@ async function pushResult(gameId) {
   const linkRow = await db.one("SELECT * FROM sportsengine_links WHERE kind = 'game' AND blst_id = $1", [g.id]);
   if (!linkRow) throw badRequest("this game didn't come from SportsEngine");
   if (g.status !== "final") throw badRequest("only final games are sent");
+  if (g.result_only) throw badRequest("this score came from SportsEngine; nothing to send");
   const teamOf = async (blstTeamId, fallback) => {
     const l = await db.one("SELECT se_id FROM sportsengine_links WHERE kind = 'team' AND blst_id = $1", [blstTeamId]);
     return l ? l.se_id : fallback;
